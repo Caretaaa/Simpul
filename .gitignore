@@ -1,0 +1,24 @@
+# Dependensi & build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Database dev & log
+apps/api/*.db
+apps/api/*.db-wal
+apps/api/*.db-shm
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Editor & OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# PWA generated
+apps/web/dev-dist/

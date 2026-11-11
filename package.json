@@ -1,0 +1,24 @@
+{
+  "name": "simpul",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SIMPUL — Ruang Belajar. Ruang Praktik. Ruang Berkembang. PWA LMS untuk SMK TKJ.",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @simpul/api",
+    "dev:web": "npm run dev -w @simpul/web",
+    "build": "npm run build -w @simpul/shared && npm run build -w @simpul/api && npm run build -w @simpul/web",
+    "test": "npm run test -w @simpul/shared && npm run test -w @simpul/api",
+    "seed": "npm run seed -w @simpul/api"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/server": "^1.9.2"
+  }
+}

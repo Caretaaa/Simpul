@@ -1,0 +1,326 @@
+/* SIMPUL design tokens — "Technical Editorial × Industrial Learning Workspace" */
+:root,
+[data-theme="light"] {
+  --paper: #f6f4ee;      /* Workshop Paper */
+  --surface: #fffefa;
+  --elevated: #ffffff;
+  --ink: #171d24;
+  --muted: #647079;
+  --accent: #de653f;
+  --accent-ink: #ffffff;
+  --teal: #446d65;
+  --line: #dddcd5;
+  --danger: #b3261e;
+  --ok: #2e6b34;
+  --warn: #8a5a00;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --paper: #11171c;      /* Graphite Laboratory */
+  --surface: #1b2329;
+  --elevated: #242e35;
+  --ink: #f2f1eb;
+  --muted: #a8b2b7;
+  --accent: #f18b67;
+  --accent-ink: #171d24;
+  --teal: #9abfb0;
+  --line: #364149;
+  --danger: #ff8a80;
+  --ok: #9ed6a4;
+  --warn: #ffd97a;
+  color-scheme: dark;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.font-display { font-family: "Space Grotesk", system-ui, sans-serif; }
+.font-mono2 { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+
+/* Fokus keyboard yang jelas (WCAG 2.2 AA). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Transisi restrained 150–250ms; hormati reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.transition-quiet { transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease; }
+
+/* Garis arsitektural khas SIMPUL: pemisah 1px + nomor teknis. */
+.rule-line { border-color: var(--line); }
+.tech-no {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  color: var(--ink);
+}
+.input[aria-invalid="true"] { border-color: var(--danger); }
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 0.6rem 1rem;
+}
+.btn-ghost {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  color: var(--ink);
+  background: transparent;
+}
+
+/* ——— Identitas visual kursus (CourseCover) ——— */
+.cover { display: block; width: 100%; height: 100%; }
+.cover-bg { fill: var(--paper); }
+.cover-grid { stroke: var(--line); opacity: 0.55; }
+.cover-link { stroke: var(--muted); opacity: 0.7; }
+.cover-halo { fill: none; stroke: var(--line); opacity: 0.8; }
+.cover-core { fill: var(--accent); }
+.cover-edge { fill: var(--teal); }
+.cover-leaf { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; }
+.cover-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  fill: var(--ink);
+}
+.cover-sublabel {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  fill: var(--muted);
+}
+
+/* ——— Jalur belajar & progres ——— */
+.progress-fill { background: var(--accent); }
+.lesson-dot {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  border: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  flex-shrink: 0;
+  color: var(--muted);
+  background: var(--surface);
+}
+.lesson-dot-done {
+  border-color: var(--ok);
+  color: var(--ok);
+  font-size: 12px;
+}
+.lesson-dot-current {
+  border-color: var(--accent);
+  color: var(--accent);
+  border-width: 2px;
+}
+.path-rail { position: relative; }
+.path-rail::before {
+  content: "";
+  position: absolute;
+  left: 0.875rem;
+  top: 2rem;
+  bottom: 0.5rem;
+  width: 1px;
+  background: var(--line);
+}
+
+/* ——— Kerangka muat ——— */
+.skeleton {
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--paper) 25%, var(--surface) 50%, var(--paper) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  border: 1px solid var(--line);
+  min-height: 1rem;
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ——— Cangkang aplikasi: bilah atas, laci, dropdown ——— */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.topbar-search {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem 0.45rem 2.1rem;
+  font-size: 14px;
+  width: 100%;
+  color: var(--ink);
+}
+.topbar-search::placeholder { color: var(--muted); }
+.icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  color: var(--muted);
+}
+.icon-btn:hover { background: var(--paper); color: var(--ink); border-color: var(--line); }
+.unread-dot {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.45rem;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.2rem;
+  border-radius: 9999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 10px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.dropdown-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  min-width: 13rem;
+  background: var(--elevated);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
+  padding: 0.35rem;
+  z-index: 30;
+}
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  font-size: 14px;
+  padding: 0.55rem 0.7rem;
+  border-radius: 7px;
+  color: var(--ink);
+}
+.dropdown-item:hover { background: var(--paper); }
+.dropdown-item[aria-checked="true"] { font-weight: 600; }
+.nav-active-indicator { border-left: 3px solid var(--accent); }
+.soon-badge {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px dashed var(--line);
+  border-radius: 9999px;
+  padding: 0.1rem 0.45rem;
+  color: var(--muted);
+}
+/* Badge halaman demo — aksen, bukan abu "segera hadir". */
+.demo-badge {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px dashed var(--accent);
+  border-radius: 9999px;
+  padding: 0.1rem 0.45rem;
+  color: var(--accent);
+}
+.demo-banner { border-left: 3px solid var(--accent); }
+.avatar-circle {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  flex-shrink: 0;
+}
+.stat-card { position: relative; overflow: hidden; }
+.stat-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
+  opacity: 0.85;
+}
+.welcome-band {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  position: relative;
+  overflow: hidden;
+}
+.welcome-band::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(var(--line) 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 0.35;
+  mask-image: linear-gradient(100deg, transparent 55%, black 100%);
+}
+
+/* ——— Daftar isi materi ——— */
+.toc-link {
+  display: block;
+  font-size: 13px;
+  padding: 0.3rem 0.6rem;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+.toc-link:hover { color: var(--ink); border-color: var(--accent); }
+.toc-link-h1 { font-weight: 600; color: var(--ink); }
+.toc-link-h2 { padding-left: 1rem; }
