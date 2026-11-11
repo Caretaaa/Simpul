@@ -22,3 +22,5 @@ apps/api/*.db-shm
 
 # PWA generated
 apps/web/dev-dist/
+.vercel
+.env*
