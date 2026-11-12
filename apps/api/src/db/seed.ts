@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { hashPassword } from "../middleware/auth.js";
 import { generateJoinCode } from "../modules/classes/joinCode.js";
 import { getDb } from "./connection.js";
@@ -10,8 +11,13 @@ import { academicYears, classMemberships, classes, courseEnrollments, courses, l
  * Jangan pernah menampilkannya sebagai data sekolah asli.
  * Eksekusi: npm run seed -w @simpul/api
  */
-async function main(): Promise<void> {
-  migrate();
+/**
+ * Isi data demo ke database aktif (SQLite lokal ATAU Postgres).
+ * Idempoten: semua insert memakai onConflictDoNothing.
+ * Pemanggil wajib sudah menerapkan skema (migrate() untuk SQLite,
+ * ensurePgReady() untuk Postgres).
+ */
+export async function seedDemo(): Promise<void> {
   const db = getDb();
   const now = new Date();
   const yearId = randomUUID();
@@ -187,6 +193,11 @@ async function main(): Promise<void> {
   console.log("  Tautan gabung: http://localhost:5173/join/" + classJoinCode);
 }
 
+async function main(): Promise<void> {
+  migrate();
+  await seedDemo();
+}
+
 /** Contoh isi materi: paragraf + blok perintah untuk menguji tampilan baca. */
 function sampleLesson(topic: string): string {
   return [
@@ -209,7 +220,11 @@ function sampleLesson(topic: string): string {
   ].join("\n");
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Jalankan seed hanya bila file ini dieksekusi langsung (bukan diimpor
+// oleh pg-init.ts / lainnya).
+if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
