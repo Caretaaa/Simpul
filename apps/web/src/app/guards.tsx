@@ -34,3 +34,14 @@ export function RequireAuth({ roles }: { roles: Role[] }) {
     </AppShell>
   );
 }
+
+/** Autentikasi tanpa AppShell untuk halaman fokus seperti ujian. */
+export function RequireBareAuth({ roles }: { roles: Role[] }) {
+  const { user, loading } = useAuth();
+  const { t } = useI18n();
+  const loc = useLocation();
+  if (loading) return <p className="p-8" role="status">{t("forbidden.loading")}</p>;
+  if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
+  if (!roles.includes(user.role)) return <Navigate to={roleHome(user.role)} replace />;
+  return <Outlet />;
+}

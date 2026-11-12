@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { Clock, Search, UserRound } from "lucide-react";
+import { Clock, LockKeyhole, Search, UserRound } from "lucide-react";
 import { api, ApiError } from "../../lib/api";
 import { useI18n } from "../../lib/I18nContext";
 import {
@@ -23,6 +23,7 @@ import {
 import { JoinClassForm } from "../classes/class-join";
 import { useAuth } from "../auth/AuthContext";
 import { useLearningOverview, type CourseSummary } from "./useLearning";
+import { hasCompletedPretest } from "../exams/types";
 import {
   courseStatus,
   filterCourses,
@@ -283,6 +284,7 @@ export function StudentCoursesPage() {
 export function StudentCourseDetailPage() {
   const { courseId = "" } = useParams();
   const { t } = useI18n();
+  const { user } = useAuth();
   const { detailQ } = useLearningOverview();
   const q = useQuery({
     queryKey: ["course", courseId],
@@ -312,6 +314,8 @@ export function StudentCourseDetailPage() {
   const lessons = modules.flatMap((m) => m.lessons);
   const completed = new Set(progress?.completed ?? []);
   const doneCount = lessons.filter((l) => completed.has(l.id)).length;
+  const pretestDone = user ? hasCompletedPretest(user.id, course.id) : false;
+  const materialsComplete = lessons.length > 0 && doneCount === lessons.length;
   const flatIndex = new Map(lessons.map((l, i) => [l.id, i]));
   const firstTodo = lessons.find((l) => !completed.has(l.id)) ?? null;
   const meta = (detailQ.data?.enriched ?? []).find((c) => c.id === course.id);
@@ -363,7 +367,7 @@ export function StudentCourseDetailPage() {
           <div className="mt-4 max-w-md">
             <ProgressBar value={doneCount} total={lessons.length} label={t("courseDetail.progressLabel")} />
           </div>
-          {firstTodo && (
+          {firstTodo && pretestDone && (
             <Link
               to={`/student/lessons/${firstTodo.id}`}
               className="btn-primary text-sm inline-block mt-4"
@@ -371,10 +375,32 @@ export function StudentCourseDetailPage() {
               {t("common.continue")}: {firstTodo.title}
             </Link>
           )}
+          {!pretestDone && (
+            <Link to={`/student/courses/${course.id}/exams/pretest`} className="mt-4 inline-flex min-h-11 items-center rounded-xl bg-orange-500 px-4 text-sm font-semibold text-white hover:bg-orange-600">
+              Kerjakan Pretest untuk membuka materi →
+            </Link>
+          )}
         </div>
       </section>
 
-      <ol className="space-y-5">
+      <section className="card mb-6 flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between" aria-label="Akses Posttest">
+        <div>
+          <p className="tech-no">EVALUASI AKHIR</p>
+          <h2 className="mt-1 font-display text-lg font-semibold">Posttest</h2>
+          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
+            {materialsComplete ? "Semua materi selesai. Saatnya mengukur pemahamanmu." : `Selesaikan semua materi untuk membuka Posttest (${doneCount}/${lessons.length}).`}
+          </p>
+        </div>
+        {materialsComplete && pretestDone ? (
+          <Link to={`/student/courses/${course.id}/exams/posttest`} className="btn-primary shrink-0 text-sm">Mulai Posttest →</Link>
+        ) : (
+          <span className="inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl bg-stone-100 px-4 text-sm font-semibold text-stone-500" aria-disabled="true">
+            <LockKeyhole size={15} aria-hidden /> Terkunci
+          </span>
+        )}
+      </section>
+
+      <ol id="materials" className="space-y-5">
         {modules.map((m, i) => {
           const moduleDone = m.lessons.filter((l) => completed.has(l.id)).length;
           return (
@@ -395,22 +421,28 @@ export function StudentCourseDetailPage() {
                     const state = done ? "done" : firstTodo?.id === l.id ? "current" : "todo";
                     return (
                       <li key={l.id}>
-                        <Link
-                          to={`/student/lessons/${l.id}`}
-                          className="flex items-center gap-3 py-2 pl-0 group"
-                          aria-label={`${l.title}${done ? ` ${t("courseDetail.doneSuffix")}` : firstTodo?.id === l.id ? ` ${t("courseDetail.continueSuffix")}` : ""}`}
-                        >
-                          <LessonStatusDot state={state as "done" | "current" | "todo"} index={flatIndex.get(l.id) ?? 0} />
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-sm font-medium truncate group-hover:underline">{l.title}</span>
-                            <span className="tech-no">{l.contentType}</span>
-                          </span>
-                          {state === "current" && (
-                            <span className="text-xs font-semibold shrink-0" style={{ color: "var(--accent)" }}>
-                              {t("courseDetail.continueHere")} →
+                        {!pretestDone ? (
+                          <div className="flex items-center gap-3 py-2 text-stone-400" aria-label={`${l.title}, terkunci sampai Pretest selesai`}>
+                            <LockKeyhole size={17} aria-hidden />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium">{l.title}</span>
+                              <span className="tech-no">Selesaikan Pretest untuk membuka</span>
                             </span>
-                          )}
-                        </Link>
+                          </div>
+                        ) : (
+                          <Link
+                            to={`/student/lessons/${l.id}`}
+                            className="group flex items-center gap-3 py-2 pl-0"
+                            aria-label={`${l.title}${done ? ` ${t("courseDetail.doneSuffix")}` : firstTodo?.id === l.id ? ` ${t("courseDetail.continueSuffix")}` : ""}`}
+                          >
+                            <LessonStatusDot state={state as "done" | "current" | "todo"} index={flatIndex.get(l.id) ?? 0} />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium group-hover:underline">{l.title}</span>
+                              <span className="tech-no">{l.contentType}</span>
+                            </span>
+                            {state === "current" && <span className="shrink-0 text-xs font-semibold" style={{ color: "var(--accent)" }}>{t("courseDetail.continueHere")} →</span>}
+                          </Link>
+                        )}
                       </li>
                     );
                   })}
@@ -494,6 +526,16 @@ export function StudentCourseDetailPage() {
   }
 
   const data = lesson.data;
+  if (!user || !hasCompletedPretest(user.id, data.course.id)) {
+    return (
+      <div className="mx-auto max-w-xl rounded-2xl border border-stone-200 bg-white p-6 text-center sm:p-8">
+        <LockKeyhole className="mx-auto text-orange-600" size={30} aria-hidden />
+        <h1 className="mt-4 font-display text-2xl font-bold">Materi masih terkunci</h1>
+        <p className="mt-2 text-sm text-stone-600">Selesaikan Pretest kursus ini untuk membuka materi pembelajaran.</p>
+        <Link to={`/student/courses/${data.course.id}/exams/pretest`} className="mt-5 inline-flex min-h-11 items-center rounded-xl bg-orange-500 px-4 font-semibold text-white hover:bg-orange-600">Kerjakan Pretest</Link>
+      </div>
+    );
+  }
   const isDone = (progress.data?.progress ?? []).some((p) => p.lessonId === lessonId && p.status === "completed");
   const body = data.lesson.body ?? "";
   const { toc } = parseLessonBlocks(body);

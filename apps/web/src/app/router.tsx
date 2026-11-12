@@ -1,5 +1,6 @@
+import { lazy, Suspense } from "react";
 import { Navigate, createBrowserRouter } from "react-router-dom";
-import { RequireAuth } from "./guards";
+import { RequireAuth, RequireBareAuth } from "./guards";
 import { LoginPage } from "../features/auth/LoginPage";
 import { AdminDashboard, StudentDashboard, TeacherDashboard } from "../routes/dashboards";
 import {
@@ -31,9 +32,20 @@ import { DemoAssignmentsPage } from "../features/demo/demo-assignments";
 import { DemoQuizRunnerPage, DemoQuizzesPage } from "../features/demo/demo-quizzes";
 import { DemoSubnetPage } from "../features/demo/demo-subnet";
 
+const StudentExamPage = lazy(() => import("../features/exams/StudentExamPage"));
+
 export const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
   { path: "/", element: <Navigate to="/login" replace /> },
+  {
+    element: <RequireBareAuth roles={["siswa"]} />,
+    children: [
+      {
+        path: "/student/courses/:courseId/exams/:examType",
+        element: <Suspense fallback={<div className="min-h-screen bg-[#FDFBF7] p-8 text-stone-600" role="status">Memuat modul ujian…</div>}><StudentExamPage /></Suspense>,
+      },
+    ],
+  },
   {
     element: <RequireAuth roles={["siswa"]} />,
     children: [
