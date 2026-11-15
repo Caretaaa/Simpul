@@ -255,11 +255,18 @@ student-checkin,student,session-mobile,student-mobile}.png`.
 - Perbaikan `3e13f04`: DDL dipisah per versi (`0001` inti, `0002` absensi) dan
   tiap chunk dikirim sebagai satu query; deploy lama hanya menjalankan chunk
   absensi. `/api/health` → **200** (cold start 4,3 s; warm 1,2 s).
-- Verifikasi API produksi: login guru → `GET /api/attendance/classes` (200, kelas
-  XI TKJ 1), `POST /sessions` (created, kode kartu `5UDQ6RFLBQ` dibuat malas),
-  scan isi QR `SIMPUL:ATT:...` → `hadir/scan`, scan ulang → `duplicate: true`,
-  `GET /classes/:id/cards` (200), `GET /api/attendance/me` sebagai siswa → kartu
-  + riwayat memuat sesi tersebut. Sesi uji dihapus kembali (0 sesi tersisa).
+- Deploy berikutnya (commit `5af4d73`, QR per sesi) hanya menjalankan chunk DDL
+  `0003` (kolom `attendance_sessions.code` + indeks unik). `/api/health` → **200**
+  (cold 4,7 s, warm ~1,2 s).
+- Verifikasi API produksi: login guru → `POST /sessions` (created, `code` 8
+  karakter `VJ22BU32` — membuktikan chunk `0003` sudah diterapkan), login siswa →
+  `GET /sessions/by-code/:code` (200, `XI TKJ 1`, `myStatus=null`) → `POST
+  .../check-in` (201, `hadir/scan`) → check-in ulang (200, `duplicate: true`) →
+  `DELETE /sessions/:id` (200). Sesi uji dihapus kembali.
 - `SIMPUL_BASE=https://simpul-flame.vercel.app npx tsx tooling/attendance-check.ts`
-  → **18/18 lulus** (sama seperti lokal). Latensi Neon membuat aksi butuh
-  3–9 detik, sehingga skrip verifikasi diubah memakai polling, bukan jeda tetap.
+  → **26/26 lulus** (sama seperti lokal), termasuk alur QR → login → kembali ke
+  `/absen/<KODE>` → check-in, dan penghapusan sesi uji di akhir skrip. Latensi
+  Neon membuat aksi butuh 3–9 detik, sehingga skrip memakai polling, bukan jeda
+  tetap.
+- Kolom lama `users.attendance_code` masih ada di database produksi (nullable,
+  tidak dipakai) dan boleh dibiarkan; tidak ada kode yang membacanya lagi.
