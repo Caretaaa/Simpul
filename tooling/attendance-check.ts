@@ -12,6 +12,33 @@ const ACC = {
   siswa: { email: "siswa@simpul.sch.id", password: "Siswa123!" },
 };
 
+/**
+ * Tunggu sampai teks pada `scope` cocok. Deploy produksi (Neon HTTP) bisa
+ * butuh beberapa detik per permintaan, jadi pemeriksaan ini memakai polling
+ * alih-alih jeda tetap.
+ */
+async function waitForText(page: Page, scope: string, needle: RegExp, timeout = 25000): Promise<string> {
+  const deadline = Date.now() + timeout;
+  let text = "";
+  do {
+    text = (await page.textContent(scope)) ?? "";
+    if (needle.test(text)) return text;
+    await page.waitForTimeout(400);
+  } while (Date.now() < deadline);
+  return text;
+}
+
+async function waitForCount(page: Page, selector: string, timeout = 25000): Promise<number> {
+  const deadline = Date.now() + timeout;
+  let count = 0;
+  do {
+    count = await page.locator(selector).count();
+    if (count > 0) return count;
+    await page.waitForTimeout(400);
+  } while (Date.now() < deadline);
+  return count;
+}
+
 const results: Array<{ step: string; ok: boolean; note: string }> = [];
 function check(step: string, ok: boolean, note = ""): void {
   results.push({ step, ok, note });
@@ -71,16 +98,14 @@ async function main(): Promise<void> {
   await firstRow.waitFor({ state: "visible" });
   const firstCode = (await firstRow.locator(".font-mono2").first().textContent())?.trim() ?? "";
   await firstRow.getByRole("button", { name: "Hadir", exact: true }).click();
-  await page.waitForTimeout(900);
-  const firstRowText = (await firstRow.textContent()) ?? "";
+  const firstRowText = await waitForText(page, "main ul > li.card", /Manual/);
   check("status manual tersimpan", /Hadir/.test(firstRowText) && /Manual/.test(firstRowText), firstRowText.slice(0, 80));
   check("kode kartu tampil di baris siswa", /^[2-9A-HJ-NP-Z]{10}$/.test(firstCode), firstCode);
 
   // ——— Pindai kode (jalur input; pemindai barcode USB memakai jalur yang sama)
   await page.fill("#scan-code", firstCode);
   await page.press("#scan-code", "Enter");
-  await page.waitForTimeout(1200);
-  const feedback = (await page.locator('[aria-live="polite"]').first().textContent()) ?? "";
+  const feedback = await waitForText(page, '[aria-live="polite"]', /(Kehadiran tercatat|sudah ditandai hadir|Status diperbarui)/);
   check(
     "hasil pindai memberi umpan balik",
     /(Kehadiran tercatat|sudah ditandai hadir|Status diperbarui)/.test(feedback),
@@ -90,19 +115,17 @@ async function main(): Promise<void> {
   // ——— Pindai kode asing ditolak
   await page.fill("#scan-code", "ZZZZZZZZZZ");
   await page.press("#scan-code", "Enter");
-  await page.waitForTimeout(900);
-  const badFeedback = (await page.locator('[aria-live="polite"]').first().textContent()) ?? "";
+  const badFeedback = await waitForText(page, '[aria-live="polite"]', /tidak dikenali/);
   check("kode asing ditolak dengan pesan", /tidak dikenali/.test(badFeedback), badFeedback.trim());
 
   // ——— Tutup lalu buka kembali
   const closeBtn = page.getByRole("button", { name: /Tutup sesi/ });
   if ((await closeBtn.count()) > 0) {
     await closeBtn.click();
-    await page.waitForTimeout(1000);
-    const bodyClosed = (await page.textContent("main")) ?? "";
+    const bodyClosed = await waitForText(page, "main", /Ditutup/);
     check("sesi dapat ditutup", /Ditutup/.test(bodyClosed));
     await page.getByRole("button", { name: /Buka kembali sesi/ }).click();
-    await page.waitForTimeout(1000);
+    await waitForText(page, "main", /Berlangsung/);
   } else {
     check("tombol tutup sesi tersedia", false);
   }
@@ -112,8 +135,7 @@ async function main(): Promise<void> {
   await cardsLink.waitFor({ state: "visible" });
   const cardsHref = await cardsLink.getAttribute("href");
   await page.goto(`${BASE}${cardsHref}`, { waitUntil: "networkidle" });
-  await page.waitForTimeout(1500);
-  const qrCount = await page.locator("#attendance-print img").count();
+  const qrCount = await waitForCount(page, "#attendance-print img");
   const cardsText = (await page.textContent("main")) ?? "";
   await page.screenshot({ path: `${OUT}/attendance-cards.png`, fullPage: true });
   check("kartu QR siswa dirender", qrCount > 0, `${qrCount} QR`);
@@ -124,7 +146,7 @@ async function main(): Promise<void> {
   const mp = await mobile.newPage();
   await login(mp, "guru");
   await mp.goto(sessionUrl, { waitUntil: "networkidle" });
-  await mp.waitForTimeout(1200);
+  await waitForCount(mp, "main ul > li.card");
   const overflow = await mp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   await mp.screenshot({ path: `${OUT}/attendance-session-mobile.png`, fullPage: true });
   check("sesi tidak meluber horizontal di ponsel", overflow <= 1, `overflow=${overflow}px`);
@@ -136,8 +158,7 @@ async function main(): Promise<void> {
   sp.on("pageerror", (e) => consoleErrors.push(String(e)));
   await login(sp, "siswa");
   await sp.goto(`${BASE}/student/attendance`, { waitUntil: "networkidle" });
-  await sp.waitForTimeout(1600);
-  const studentQr = await sp.locator('img[alt="QR kartu absensi"]').count();
+  const studentQr = await waitForCount(sp, 'img[alt="QR kartu absensi"]');
   const studentBody = (await sp.textContent("main")) ?? "";
   await sp.screenshot({ path: `${OUT}/attendance-student.png`, fullPage: true });
   check("siswa melihat QR kartu", studentQr > 0);
@@ -148,7 +169,7 @@ async function main(): Promise<void> {
   const msp = await mobileS.newPage();
   await login(msp, "siswa");
   await msp.goto(`${BASE}/student/attendance`, { waitUntil: "networkidle" });
-  await msp.waitForTimeout(1600);
+  await waitForCount(msp, 'img[alt="QR kartu absensi"]');
   await msp.screenshot({ path: `${OUT}/attendance-student-mobile.png`, fullPage: true });
   const sOverflow = await msp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   check("kartu siswa tidak meluber di ponsel", sOverflow <= 1, `overflow=${sOverflow}px`);

@@ -239,3 +239,20 @@ Vite + API SQLite):
 
 Screenshot: `/tmp/opencode/simpul-shots/attendance-{hub,session,cards,student,
 session-mobile,student-mobile}.png`.
+
+### Deploy produksi (Vercel + Postgres/Neon)
+
+- Commit `7d6dd16` memicu deploy otomatis lewat integrasi GitHub; `/api/health`
+  sempat **504** karena marker DDL naik ke `0002` membuat cold start menjalankan
+  ulang 38 statement DDL Postgres satu per satu (melewati batas 10 detik fungsi).
+- Perbaikan `3e13f04`: DDL dipisah per versi (`0001` inti, `0002` absensi) dan
+  tiap chunk dikirim sebagai satu query; deploy lama hanya menjalankan chunk
+  absensi. `/api/health` → **200** (cold start 4,3 s; warm 1,2 s).
+- Verifikasi API produksi: login guru → `GET /api/attendance/classes` (200, kelas
+  XI TKJ 1), `POST /sessions` (created, kode kartu `5UDQ6RFLBQ` dibuat malas),
+  scan isi QR `SIMPUL:ATT:...` → `hadir/scan`, scan ulang → `duplicate: true`,
+  `GET /classes/:id/cards` (200), `GET /api/attendance/me` sebagai siswa → kartu
+  + riwayat memuat sesi tersebut. Sesi uji dihapus kembali (0 sesi tersisa).
+- `SIMPUL_BASE=https://simpul-flame.vercel.app npx tsx tooling/attendance-check.ts`
+  → **18/18 lulus** (sama seperti lokal). Latensi Neon membuat aksi butuh
+  3–9 detik, sehingga skrip verifikasi diubah memakai polling, bukan jeda tetap.
