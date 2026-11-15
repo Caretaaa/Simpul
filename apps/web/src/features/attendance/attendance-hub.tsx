@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowRight, CalendarDays, Printer, QrCode, Users } from "lucide-react";
+import { ArrowRight, CalendarDays, QrCode, Users } from "lucide-react";
 import { api, ApiError } from "../../lib/api";
 import { useI18n } from "../../lib/I18nContext";
 import { EmptyState, PageHeader, SectionHead, Skeleton } from "../../components/design-system/primitives";
@@ -225,12 +225,14 @@ export function TeacherAttendancePage() {
                     >
                       {t("attendance.start")}
                     </button>
-                    <Link
-                      to={`/teacher/attendance/cards/${c.id}`}
-                      className="btn-ghost text-xs inline-flex items-center gap-1.5 min-h-9"
-                    >
-                      <Printer size={13} aria-hidden /> {t("attendance.printCards")}
-                    </Link>
+                    {c.today && (
+                      <Link
+                        to={`/teacher/attendance/${c.today.sessionId}/qr`}
+                        className="btn-ghost text-xs inline-flex items-center gap-1.5 min-h-9"
+                      >
+                        <QrCode size={13} aria-hidden /> {t("attendance.qrPosterShort")}
+                      </Link>
+                    )}
                   </div>
                 </article>
               ))}

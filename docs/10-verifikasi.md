@@ -211,34 +211,41 @@ diterima → chip tampil → "Terkumpul (demo)" → nama berkas + metadata masih
 setelah reload (localStorage memuat `fileName`), tanpa `pageerror`. Typecheck
 + build produksi web tetap hijau.
 
-## Fitur absensi kehadiran (verifikasi terakhir)
+## Fitur absensi kehadiran — QR per sesi (verifikasi terakhir)
 
 Perintah dan hasil nyata:
 
 ```
-npm run test -w @simpul/shared   → 15 passed (2 berkas)
-npm run test -w @simpul/api      → 20 passed (6 tes absensi)
+npm run test -w @simpul/shared   → 16 passed (2 berkas)
+npm run test -w @simpul/api      → 19 passed (6 tes absensi)
 npm run typecheck -w @simpul/api → lulus
 npm run typecheck -w @simpul/web → lulus
 npm run build                    → shared + api + web lulus (PWA ter-generate)
-npx tsx tooling/attendance-check.ts → 18 PASS / 0 FAIL
+npx tsx tooling/attendance-check.ts → 26 PASS / 0 FAIL
 ```
 
 Cakupan browser (`tooling/attendance-check.ts`, Chromium headless, dev server
 Vite + API SQLite):
 
-- guru: hub absensi memuat kelas + nav aktif; membuka sesi hari ini;
-  ringkasan total siswa; menandai **Hadir** manual (badge "Manual" + waktu);
-  memindai kode kartu → "Status diperbarui menjadi hadir" (overwrite tercatat);
-  kode asing → pesan "tidak dikenali"; menutup lalu membuka kembali sesi.
-- kartu QR kelas dirender (data URL QR) dan memuat kode 10 karakter.
-- siswa: kartu QR pribadi tampil, kelas + riwayat kehadiran memuat sesi.
-- 390×844: halaman sesi dan kartu siswa tanpa overflow horizontal.
+- guru: hub absensi memuat kelas, nav aktif, dan **tidak lagi** menautkan kartu
+  QR siswa; membuka sesi hari ini; QR sesi dirender dengan kode 8 karakter dan
+  tautan `/absen/<KODE>`; ringkasan total siswa; menandai **Hadir** manual
+  (badge "Manual" + waktu) lalu menghapus tanda; poster QR sesi tampil dan
+  memuat kode yang sama.
+- siswa: membuka tautan QR → dialihkan ke login → **kembali ke
+  `/absen/<KODE>`** setelah masuk → menekan "Tandai kehadiran saya" → status
+  `Hadir` + waktu; membuka ulang tautan tidak menggandakan catatan dan tidak
+  menampilkan tombol; kode asing → "Kode tidak dikenali"; riwayat kehadiran
+  memuat sesi; halaman siswa hanya berisi formulir kode (tanpa kartu QR
+  pribadi).
+- guru melihat status "Check-in QR" milik siswa pada sesi yang sama.
+- 390×844: halaman sesi dan check-in siswa tanpa overflow horizontal.
 - tidak ada galat API tak terduga; 401 `/auth/me` di halaman login dan 404
-  scan kode asing (uji negatif yang disengaja) dikecualikan eksplisit.
+  kode asing (uji negatif yang disengaja) dikecualikan eksplisit.
+- sesi uji dihapus kembali di akhir skrip (tidak menumpuk di database).
 
-Screenshot: `/tmp/opencode/simpul-shots/attendance-{hub,session,cards,student,
-session-mobile,student-mobile}.png`.
+Screenshot: `/tmp/opencode/simpul-shots/attendance-{hub,session,qr-poster,
+student-checkin,student,session-mobile,student-mobile}.png`.
 
 ### Deploy produksi (Vercel + Postgres/Neon)
 

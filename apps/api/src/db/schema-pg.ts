@@ -19,8 +19,6 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   role: text("role", { enum: ["admin", "guru", "siswa"] }).notNull(),
   avatarUrl: text("avatar_url"),
-  /** Kode kartu absensi 10 karakter (unik) — diisi malas saat pertama dibutuhkan. */
-  attendanceCode: text("attendance_code"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -187,6 +185,8 @@ export const attendanceSessions = pgTable("attendance_sessions", {
   title: text("title").notNull(),
   /** Tanggal sekolah "YYYY-MM-DD" (tanpa zona waktu). */
   date: text("date").notNull(),
+  /** Kode sesi unik — siswa memindai QR berisi tautan /absen/<kode>. */
+  code: text("code"),
   status: text("status", { enum: ["open", "closed"] }).notNull().default("open"),
   createdBy: text("created_by").references(() => users.id),
   createdAt: createdAt(),

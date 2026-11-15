@@ -4,8 +4,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   ATTENDANCE_STATUSES,
-  generateAttendanceCode,
-  parseAttendancePayload,
+  generateAttendanceSessionCode,
+  parseAttendanceSessionInput,
 } from "@simpul/shared";
 import { getDb, type Db } from "../../db/connection.js";
 import {
@@ -18,6 +18,12 @@ import {
   users,
 } from "../../db/schema.js";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
+
+/**
+ * Absensi dengan QR per sesi: guru menampilkan QR sesi (satu per kelas +
+ * mata pelajaran + tanggal), siswa memindai dengan ponselnya sendiri lalu
+ * menandai kehadiran. Guru tetap dapat menandai daftar secara manual.
+ */
 
 /** Tanggal sekolah (YYYY-MM-DD) menurut zona waktu Indonesia Barat. */
 function schoolToday(): string {
@@ -43,10 +49,6 @@ const RecordSchema = z.object({
   studentId: z.string().min(1, "Siswa wajib dipilih."),
   status: z.enum(ATTENDANCE_STATUSES).nullable(),
   note: z.string().trim().max(300, "Catatan maksimal 300 karakter.").nullable().optional(),
-});
-
-const ScanSchema = z.object({
-  code: z.string().min(3, "Kode kartu tidak valid.").max(200),
 });
 
 const PatchSessionSchema = z.object({
@@ -78,27 +80,37 @@ async function canAccessClass(db: Db, user: { id: string; role: Role }, classId:
   return scope.all || scope.ids.has(classId);
 }
 
-/** Pastikan siswa punya kode kartu unik; tulis sekali bila masih kosong. */
-async function ensureAttendanceCode(
+async function isClassMember(db: Db, classId: string, studentId: string): Promise<boolean> {
+  const members = await db.select().from(classMemberships).where(eq(classMemberships.classId, classId));
+  return members.some((m) => m.studentId === studentId);
+}
+
+/**
+ * Pastikan sesi punya kode unik. Sesi lama (sebelum fitur QR sesi) belum punya
+ * kode sehingga diisi malas saat pertama dibaca; kode tidak pernah berubah,
+ * jadi QR yang sudah dicetak tetap berlaku.
+ */
+async function ensureSessionCode(
   db: Db,
-  student: typeof users.$inferSelect,
+  session: typeof attendanceSessions.$inferSelect,
 ): Promise<string> {
-  if (student.attendanceCode) return student.attendanceCode;
+  if (session.code) return session.code;
   for (let attempt = 0; attempt < 8; attempt++) {
-    const code = generateAttendanceCode();
-    const clash = await db.select().from(users).where(eq(users.attendanceCode, code));
+    const code = generateAttendanceSessionCode();
+    const clash = await db.select().from(attendanceSessions).where(eq(attendanceSessions.code, code));
     if (clash[0]) continue;
-    await db.update(users).set({ attendanceCode: code, updatedAt: new Date() }).where(eq(users.id, student.id));
+    await db.update(attendanceSessions).set({ code }).where(eq(attendanceSessions.id, session.id));
+    session.code = code;
     return code;
   }
-  // Praktis tidak tercapai (32^10 kombinasi): pakai cap waktu sebagai jalan terakhir.
-  const fallback = `${generateAttendanceCode().slice(0, 8)}${Date.now().toString(36).toUpperCase().slice(-2)}`;
-  await db.update(users).set({ attendanceCode: fallback, updatedAt: new Date() }).where(eq(users.id, student.id));
+  // Praktis tidak tercapai (32^8 kombinasi) — pakai cap waktu sebagai jalan terakhir.
+  const fallback = `${generateAttendanceSessionCode().slice(0, 5)}${Date.now().toString(36).toUpperCase().slice(-3)}`;
+  await db.update(attendanceSessions).set({ code: fallback }).where(eq(attendanceSessions.id, session.id));
+  session.code = fallback;
   return fallback;
 }
 
 interface Roster {
-  memberships: Array<typeof classMemberships.$inferSelect>;
   students: Array<typeof users.$inferSelect>;
 }
 
@@ -110,7 +122,7 @@ async function loadRoster(db: Db, classId: string): Promise<Roster> {
     .map((m) => byId.get(m.studentId))
     .filter((u): u is typeof users.$inferSelect => Boolean(u))
     .sort((a, b) => a.name.localeCompare(b.name, "id"));
-  return { memberships, students };
+  return { students };
 }
 
 function summarize(
@@ -139,6 +151,11 @@ async function loadSession(db: Db, sessionId: string) {
   return rows[0] ?? null;
 }
 
+async function loadSessionByCode(db: Db, code: string) {
+  const rows = await db.select().from(attendanceSessions).where(eq(attendanceSessions.code, code));
+  return rows[0] ?? null;
+}
+
 async function buildSessionDetail(db: Db, session: typeof attendanceSessions.$inferSelect) {
   const klass = (await db.select().from(classes).where(eq(classes.id, session.classId)))[0] ?? null;
   const course = session.courseId
@@ -150,31 +167,20 @@ async function buildSessionDetail(db: Db, session: typeof attendanceSessions.$in
   const { students } = await loadRoster(db, session.classId);
   const records = await db.select().from(attendanceRecords).where(eq(attendanceRecords.sessionId, session.id));
   const byStudent = new Map(records.map((r) => [r.studentId, r]));
+  const code = await ensureSessionCode(db, session);
 
-  const roster = [] as Array<{
-    id: string;
-    name: string;
-    email: string;
-    attendanceCode: string | null;
-    status: "hadir" | "terlambat" | "izin" | "sakit" | "alpa" | null;
-    method: "scan" | "manual" | null;
-    note: string | null;
-    markedAt: string | null;
-  }>;
-  for (const student of students) {
-    const code = await ensureAttendanceCode(db, student);
+  const roster = students.map((student) => {
     const record = byStudent.get(student.id);
-    roster.push({
+    return {
       id: student.id,
       name: student.name,
       email: student.email,
-      attendanceCode: code,
       status: record?.status ?? null,
       method: record?.method ?? null,
       note: record?.note ?? null,
       markedAt: iso(record?.markedAt),
-    });
-  }
+    };
+  });
 
   return {
     id: session.id,
@@ -186,6 +192,7 @@ async function buildSessionDetail(db: Db, session: typeof attendanceSessions.$in
     title: session.title,
     date: session.date,
     status: session.status,
+    code,
     createdAt: iso(session.createdAt) ?? "",
     updatedAt: iso(session.updatedAt) ?? "",
     createdByName: creator?.name ?? null,
@@ -196,6 +203,7 @@ async function buildSessionDetail(db: Db, session: typeof attendanceSessions.$in
 
 export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
   const teacherOnly = requireRole(["guru", "admin"]);
+  const studentOnly = requireRole(["siswa"]);
 
   // Kelas yang dapat diabsen guru beserta sesi hari ini.
   app.get("/classes", async (req, reply) => {
@@ -222,9 +230,7 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
       );
       const candidates = todaySessions.filter((s) => s.classId === klass.id);
       const chosen = candidates.find((s) => s.createdBy === req.user!.id) ?? candidates[0] ?? null;
-      const markedCount = chosen
-        ? allRecords.filter((r) => r.sessionId === chosen.id).length
-        : 0;
+      const markedCount = chosen ? allRecords.filter((r) => r.sessionId === chosen.id).length : 0;
       return {
         id: klass.id,
         name: klass.name,
@@ -266,9 +272,9 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 100) : 20;
 
     const rows = await db.select().from(attendanceSessions).orderBy(desc(attendanceSessions.createdAt)).limit(200);
-    const visible = rows.filter(
-      (s) => (scope.all || scope.ids.has(s.classId)) && (!query.classId || s.classId === query.classId),
-    ).slice(0, limit);
+    const visible = rows
+      .filter((s) => (scope.all || scope.ids.has(s.classId)) && (!query.classId || s.classId === query.classId))
+      .slice(0, limit);
 
     const allClasses = await db.select().from(classes);
     const classById = new Map(allClasses.map((k) => [k.id, k]));
@@ -277,27 +283,29 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
     const memberships = await db.select().from(classMemberships);
     const records = await db.select().from(attendanceRecords);
 
-    return reply.send({
-      sessions: visible.map((s) => {
-        const memberCount = memberships.filter((m) => m.classId === s.classId).length;
-        const own = records.filter((r) => r.sessionId === s.id);
-        return {
-          id: s.id,
-          classId: s.classId,
-          className: classById.get(s.classId)?.name ?? "—",
-          courseId: s.courseId,
-          courseTitle: s.courseId ? (courseById.get(s.courseId)?.title ?? null) : null,
-          title: s.title,
-          date: s.date,
-          status: s.status,
-          memberCount,
-          markedCount: own.length,
-          presentCount: own.filter((r) => r.status === "hadir").length,
-          createdAt: iso(s.createdAt) ?? "",
-          updatedAt: iso(s.updatedAt) ?? "",
-        };
-      }),
-    });
+    const sessions = [];
+    for (const s of visible) {
+      const memberCount = memberships.filter((m) => m.classId === s.classId).length;
+      const own = records.filter((r) => r.sessionId === s.id);
+      sessions.push({
+        id: s.id,
+        classId: s.classId,
+        className: classById.get(s.classId)?.name ?? "—",
+        courseId: s.courseId,
+        courseTitle: s.courseId ? (courseById.get(s.courseId)?.title ?? null) : null,
+        title: s.title,
+        date: s.date,
+        status: s.status,
+        code: await ensureSessionCode(db, s),
+        memberCount,
+        markedCount: own.length,
+        presentCount: own.filter((r) => r.status === "hadir").length,
+        createdAt: iso(s.createdAt) ?? "",
+        updatedAt: iso(s.updatedAt) ?? "",
+      });
+    }
+
+    return reply.send({ sessions });
   });
 
   // Buka sesi absensi; idempoten untuk sesi terbuka yang sama.
@@ -343,6 +351,7 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
       courseId,
       title: parsed.data.title ?? courseTitle ?? "Absensi harian",
       date,
+      code: generateAttendanceSessionCode(),
       status: "open" as const,
       createdBy: req.user!.id,
       createdAt: now,
@@ -359,6 +368,124 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
       createdAt: now,
     });
     return reply.code(201).send({ session: await buildSessionDetail(db, row), created: true });
+  });
+
+  /**
+   * Pratinjau sesi dari kode QR untuk siswa: memastikan kode valid dan siswa
+   * benar anggota kelas, sekaligus memberi tahu status kehadirannya saat ini.
+   */
+  app.get("/sessions/by-code/:code", async (req, reply) => {
+    if (!requireAuth(req, reply)) return;
+    if (!studentOnly(req, reply)) return;
+    const { code } = req.params as { code: string };
+    const normalized = parseAttendanceSessionInput(code);
+    if (!normalized) return reply.code(404).send({ message: "Kode absensi tidak dikenali." });
+
+    const db = getDb();
+    const session = await loadSessionByCode(db, normalized);
+    if (!session) return reply.code(404).send({ message: "Kode absensi tidak dikenali." });
+    if (!(await isClassMember(db, session.classId, req.user!.id))) {
+      return reply.code(403).send({ message: "Anda bukan anggota kelas sesi absensi ini." });
+    }
+    const klass = (await db.select().from(classes).where(eq(classes.id, session.classId)))[0] ?? null;
+    const course = session.courseId
+      ? ((await db.select().from(courses).where(eq(courses.id, session.courseId)))[0] ?? null)
+      : null;
+    const members = await db.select().from(classMemberships).where(eq(classMemberships.classId, session.classId));
+    const records = await db.select().from(attendanceRecords).where(eq(attendanceRecords.sessionId, session.id));
+    const mine = records.find((r) => r.studentId === req.user!.id);
+
+    return reply.send({
+      session: {
+        id: session.id,
+        className: klass?.name ?? "—",
+        title: session.title,
+        courseTitle: course?.title ?? null,
+        date: session.date,
+        status: session.status,
+        code: await ensureSessionCode(db, session),
+        memberCount: members.length,
+        presentCount: records.filter((r) => r.status === "hadir").length,
+        myStatus: mine?.status ?? null,
+        myMethod: mine?.method ?? null,
+        myNote: mine?.note ?? null,
+        myMarkedAt: iso(mine?.markedAt),
+      },
+    });
+  });
+
+  /** Siswa menandai kehadirannya sendiri dari QR sesi. */
+  app.post("/sessions/by-code/:code/check-in", async (req, reply) => {
+    if (!requireAuth(req, reply)) return;
+    if (!studentOnly(req, reply)) return;
+    const { code } = req.params as { code: string };
+    const normalized = parseAttendanceSessionInput(code);
+    if (!normalized) return reply.code(404).send({ message: "Kode absensi tidak dikenali." });
+
+    const db = getDb();
+    const session = await loadSessionByCode(db, normalized);
+    if (!session) return reply.code(404).send({ message: "Kode absensi tidak dikenali." });
+    if (!(await isClassMember(db, session.classId, req.user!.id))) {
+      return reply.code(403).send({ message: "Anda bukan anggota kelas sesi absensi ini." });
+    }
+    if (session.status !== "open") {
+      return reply.code(409).send({ message: "Sesi absensi sudah ditutup oleh guru." });
+    }
+
+    const members = await db.select().from(classMemberships).where(eq(classMemberships.classId, session.classId));
+    const existing = (
+      await db.select().from(attendanceRecords).where(eq(attendanceRecords.sessionId, session.id))
+    ).find((r) => r.studentId === req.user!.id);
+
+    // Jangan menimpa catatan guru (izin/sakit/terlambat/alpa) maupun check-in
+    // sebelumnya: kehadiran hanya bisa diubah guru lewat daftar manual.
+    if (existing) {
+      return reply.send({
+        record: {
+          studentId: existing.studentId,
+          status: existing.status,
+          method: existing.method,
+          note: existing.note ?? null,
+          markedAt: iso(existing.markedAt) ?? "",
+        },
+        summary: await sessionSummary(db, session.id, members.length),
+        duplicate: true,
+      });
+    }
+
+    const now = new Date();
+    await db.insert(attendanceRecords).values({
+      id: randomUUID(),
+      sessionId: session.id,
+      studentId: req.user!.id,
+      status: "hadir",
+      method: "scan",
+      note: null,
+      markedBy: req.user!.id,
+      markedAt: now,
+    });
+    await db.update(attendanceSessions).set({ updatedAt: now }).where(eq(attendanceSessions.id, session.id));
+    await db.insert(auditLogs).values({
+      id: randomUUID(),
+      actorId: req.user!.id,
+      action: "attendance.checkin",
+      entity: "attendance_session",
+      entityId: session.id,
+      metadata: JSON.stringify({ method: "scan" }),
+      createdAt: now,
+    });
+
+    return reply.code(201).send({
+      record: {
+        studentId: req.user!.id,
+        status: "hadir" as const,
+        method: "scan" as const,
+        note: null,
+        markedAt: iso(now) ?? "",
+      },
+      summary: await sessionSummary(db, session.id, members.length),
+      duplicate: false,
+    });
   });
 
   app.get("/sessions/:id", async (req, reply) => {
@@ -392,11 +519,11 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
     if (session.status !== "open") {
       return reply.code(409).send({ message: "Sesi absensi sudah ditutup. Buka kembali untuk mengubah kehadiran." });
     }
-    const members = await db.select().from(classMemberships).where(eq(classMemberships.classId, session.classId));
-    if (!members.some((m) => m.studentId === parsed.data.studentId)) {
+    if (!(await isClassMember(db, session.classId, parsed.data.studentId))) {
       return reply.code(404).send({ message: "Siswa bukan anggota kelas ini." });
     }
 
+    const members = await db.select().from(classMemberships).where(eq(classMemberships.classId, session.classId));
     const now = new Date();
     const existing = (
       await db.select().from(attendanceRecords).where(eq(attendanceRecords.sessionId, id))
@@ -405,8 +532,7 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
     if (parsed.data.status === null) {
       if (existing) await db.delete(attendanceRecords).where(eq(attendanceRecords.id, existing.id));
       await db.update(attendanceSessions).set({ updatedAt: now }).where(eq(attendanceSessions.id, id));
-      const total = members.length;
-      return reply.send({ record: null, summary: await sessionSummary(db, id, total) });
+      return reply.send({ record: null, summary: await sessionSummary(db, id, members.length) });
     }
 
     const record = {
@@ -442,87 +568,6 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
           }
         : null,
       summary: await sessionSummary(db, id, members.length),
-    });
-  });
-
-  // Pindai kartu QR/barcode siswa → hadir.
-  app.post("/sessions/:id/scan", async (req, reply) => {
-    if (!requireAuth(req, reply)) return;
-    if (!teacherOnly(req, reply)) return;
-    const { id } = req.params as { id: string };
-    const parsed = ScanSchema.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ message: "Kode kartu tidak valid." });
-    const code = parseAttendancePayload(parsed.data.code);
-    if (!code) return reply.code(404).send({ message: "Kode kartu tidak dikenali. Periksa kartu siswa." });
-
-    const db = getDb();
-    const session = await loadSession(db, id);
-    if (!session) return reply.code(404).send({ message: "Sesi absensi tidak ditemukan." });
-    if (!(await canAccessClass(db, req.user!, session.classId))) {
-      return reply.code(403).send({ message: "Anda tidak mengajar pada kelas ini." });
-    }
-    if (session.status !== "open") {
-      return reply.code(409).send({ message: "Sesi absensi sudah ditutup. Buka kembali untuk mencatat kehadiran." });
-    }
-
-    const student = (await db.select().from(users).where(eq(users.attendanceCode, code)))[0];
-    if (!student || student.role !== "siswa" || !student.isActive) {
-      return reply.code(404).send({ message: "Kode kartu tidak dikenali pada kelas ini." });
-    }
-    const members = await db.select().from(classMemberships).where(eq(classMemberships.classId, session.classId));
-    if (!members.some((m) => m.studentId === student.id)) {
-      return reply.code(404).send({ message: "Siswa ini bukan anggota kelas sesi absensi." });
-    }
-
-    const existing = (
-      await db.select().from(attendanceRecords).where(eq(attendanceRecords.sessionId, id))
-    ).find((r) => r.studentId === student.id);
-    if (existing && existing.status === "hadir" && existing.method === "scan") {
-      return reply.send({
-        student: { id: student.id, name: student.name },
-        record: {
-          studentId: existing.studentId,
-          status: existing.status,
-          method: existing.method,
-          note: existing.note ?? null,
-          markedAt: iso(existing.markedAt) ?? "",
-        },
-        summary: await sessionSummary(db, id, members.length),
-        duplicate: true,
-        overwritten: false,
-      });
-    }
-
-    const now = new Date();
-    const record = { status: "hadir" as const, method: "scan" as const, note: null, markedBy: req.user!.id, markedAt: now };
-    if (existing) {
-      await db.update(attendanceRecords).set(record).where(eq(attendanceRecords.id, existing.id));
-    } else {
-      await db.insert(attendanceRecords).values({ id: randomUUID(), sessionId: id, studentId: student.id, ...record });
-    }
-    await db.update(attendanceSessions).set({ updatedAt: now }).where(eq(attendanceSessions.id, id));
-    await db.insert(auditLogs).values({
-      id: randomUUID(),
-      actorId: req.user!.id,
-      action: "attendance.scan",
-      entity: "attendance_session",
-      entityId: id,
-      metadata: JSON.stringify({ studentId: student.id, overwritten: Boolean(existing) }),
-      createdAt: now,
-    });
-
-    return reply.send({
-      student: { id: student.id, name: student.name },
-      record: {
-        studentId: student.id,
-        status: record.status,
-        method: record.method,
-        note: null,
-        markedAt: iso(now) ?? "",
-      },
-      summary: await sessionSummary(db, id, members.length),
-      duplicate: false,
-      overwritten: Boolean(existing),
     });
   });
 
@@ -589,45 +634,17 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true });
   });
 
-  // Kartu QR seluruh siswa satu kelas (untuk dicetak guru).
-  app.get("/classes/:classId/cards", async (req, reply) => {
-    if (!requireAuth(req, reply)) return;
-    if (!teacherOnly(req, reply)) return;
-    const { classId } = req.params as { classId: string };
-    const db = getDb();
-    const klass = (await db.select().from(classes).where(eq(classes.id, classId)))[0];
-    if (!klass) return reply.code(404).send({ message: "Kelas tidak ditemukan." });
-    if (!(await canAccessClass(db, req.user!, classId))) {
-      return reply.code(403).send({ message: "Anda tidak mengajar pada kelas ini." });
-    }
-    const { students } = await loadRoster(db, classId);
-    const cards = [] as Array<{ id: string; name: string; attendanceCode: string }>;
-    for (const student of students) {
-      cards.push({ id: student.id, name: student.name, attendanceCode: await ensureAttendanceCode(db, student) });
-    }
-    return reply.send({
-      class: { id: klass.id, name: klass.name, grade: klass.grade, major: klass.major },
-      students: cards,
-    });
-  });
-
-  // Kartu absensi + riwayat milik siswa yang sedang masuk.
+  // Riwayat kehadiran siswa yang sedang masuk.
   app.get("/me", async (req, reply) => {
     if (!requireAuth(req, reply)) return;
-    if (!requireRole(["siswa"])(req, reply)) return;
+    if (!studentOnly(req, reply)) return;
     const db = getDb();
     const me = (await db.select().from(users).where(eq(users.id, req.user!.id)))[0];
     if (!me) return reply.code(404).send({ message: "Akun tidak ditemukan." });
-    const code = await ensureAttendanceCode(db, me);
 
     const memberships = await db.select().from(classMemberships).where(eq(classMemberships.studentId, me.id));
     const allClasses = await db.select().from(classes);
     const classById = new Map(allClasses.map((k) => [k.id, k]));
-    // Kelas utama = keanggotaan terbaru (stabil bila siswa ada di beberapa kelas).
-    const latestMembership = [...memberships].sort(
-      (a, b) => (iso(b.joinedAt) ?? "").localeCompare(iso(a.joinedAt) ?? ""),
-    )[0];
-    const myClass = latestMembership ? classById.get(latestMembership.classId) : undefined;
 
     const myRecords = (
       await db.select().from(attendanceRecords).where(eq(attendanceRecords.studentId, me.id))
@@ -640,12 +657,10 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
     const courseById = new Map(allCourses.map((c) => [c.id, c]));
 
     return reply.send({
-      card: {
-        name: me.name,
-        className: myClass?.name ?? null,
-        attendanceCode: code,
-        qrPayload: `SIMPUL:ATT:${code}`,
-      },
+      classes: memberships
+        .map((m) => classById.get(m.classId))
+        .filter((k): k is typeof classes.$inferSelect => Boolean(k))
+        .map((k) => ({ id: k.id, name: k.name })),
       history: myRecords
         .map((r) => {
           const session = sessionById.get(r.sessionId);
@@ -657,6 +672,7 @@ export async function attendanceRoutes(app: FastifyInstance): Promise<void> {
             courseTitle: session.courseId ? (courseById.get(session.courseId)?.title ?? null) : null,
             className: classById.get(session.classId)?.name ?? "—",
             status: r.status,
+            method: r.method,
             note: r.note ?? null,
             markedAt: iso(r.markedAt) ?? "",
           };

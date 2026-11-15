@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -7,7 +7,7 @@ import {
   ClipboardCheck,
   Lock,
   LockOpen,
-  Printer,
+  QrCode,
   Search,
   Trash2,
   Users,
@@ -16,7 +16,7 @@ import { ATTENDANCE_STATUSES, type AttendanceStatus } from "@simpul/shared";
 import { api, ApiError } from "../../lib/api";
 import { useI18n } from "../../lib/I18nContext";
 import { EmptyState, PageHeader, Skeleton } from "../../components/design-system/primitives";
-import { CameraScanner } from "./camera-scanner";
+import { SessionQrCard } from "./session-qr";
 import {
   sessionDateIso,
   statusColor,
@@ -25,14 +25,6 @@ import {
   type AttendanceSummary,
   type AttendanceStudentRow,
 } from "./types";
-
-interface ScanResponse {
-  student: { id: string; name: string };
-  record: { status: AttendanceStatus; method: "scan" | "manual" };
-  summary: AttendanceSummary;
-  duplicate: boolean;
-  overwritten: boolean;
-}
 
 function SummaryStrip({ summary }: { summary: AttendanceSummary }) {
   const { t } = useI18n();
@@ -77,8 +69,8 @@ function StudentRow({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-medium leading-snug truncate">{student.name}</p>
-          <p className="font-mono2 text-[11px] mt-0.5" style={{ color: "var(--muted)" }}>
-            {student.attendanceCode ?? student.email}
+          <p className="font-mono2 text-[11px] mt-0.5 truncate" style={{ color: "var(--muted)" }}>
+            {student.email}
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -87,7 +79,7 @@ function StudentRow({
           </p>
           {status && student.markedAt && (
             <p className="text-[11px] mt-0.5" style={{ color: "var(--muted)" }}>
-              {student.method === "scan" ? t("attendance.markedScan") : t("attendance.markedManual")} ·{" "}
+              {student.method === "manual" ? t("attendance.markedManual") : t("attendance.markedSelf")} ·{" "}
               {formatDate(student.markedAt, true)}
             </p>
           )}
@@ -158,7 +150,7 @@ function StudentRow({
   );
 }
 
-/** Ruang kerja absensi satu sesi: pindai kartu atau tandai daftar manual. */
+/** Ruang kerja absensi satu sesi: tampilkan QR sesi untuk siswa + daftar manual. */
 export function AttendanceSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const { t, formatDate } = useI18n();
@@ -169,16 +161,16 @@ export function AttendanceSessionPage() {
     queryKey: ["attendance-session", sessionId],
     queryFn: () => api.get<{ session: AttendanceSessionDetail }>(`/attendance/sessions/${sessionId}`),
     enabled: Boolean(sessionId),
+    // Hitungan check-in siswa bertambah dari ponsel masing-masing — segarkan
+    // selama sesi masih terbuka agar guru melihat angka terbaru.
+    refetchInterval: (q) => (q.state.data?.session.status === "open" ? 5000 : false),
   });
   const session = sessionQ.data?.session ?? null;
   const closed = session?.status === "closed";
 
-  const [code, setCode] = useState("");
-  const [scanFeedback, setScanFeedback] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(null);
   const [search, setSearch] = useState("");
   const [marking, setMarking] = useState<string | null>(null);
-  const codeInputRef = useRef<HTMLInputElement | null>(null);
 
   function invalidate() {
     void qc.invalidateQueries({ queryKey: ["attendance-session", sessionId] });
@@ -208,32 +200,6 @@ export function AttendanceSessionPage() {
       invalidate();
     },
     onSettled: () => setMarking(null),
-  });
-
-  const scan = useMutation({
-    mutationFn: (payload: string) =>
-      api.post<ScanResponse>(`/attendance/sessions/${sessionId}/scan`, { code: payload }),
-    onSuccess: (res) => {
-      const detail = res.duplicate
-        ? t("attendance.scanDuplicate")
-        : res.overwritten
-          ? t("attendance.scanUpdated")
-          : t("attendance.scanOk");
-      setScanFeedback({ tone: res.duplicate ? "warn" : "ok", text: `${res.student.name} — ${detail}` });
-      setCode("");
-      invalidate();
-      codeInputRef.current?.focus();
-    },
-    onError: (e) => {
-      const message =
-        e instanceof ApiError && e.status === 404
-          ? t("attendance.scanUnknown")
-          : e instanceof ApiError
-            ? e.message
-            : t("attendance.scanFail");
-      setScanFeedback({ tone: "error", text: message });
-      codeInputRef.current?.select();
-    },
   });
 
   const markAll = useMutation({
@@ -305,8 +271,7 @@ export function AttendanceSessionPage() {
   const query = search.trim().toLowerCase();
   const visible = query
     ? session.students.filter(
-        (s) =>
-          s.name.toLowerCase().includes(query) || (s.attendanceCode ?? "").toLowerCase().includes(query),
+        (s) => s.name.toLowerCase().includes(query) || s.email.toLowerCase().includes(query),
       )
     : session.students;
   const unmarked = session.students.filter((s) => s.status === null).length;
@@ -327,10 +292,10 @@ export function AttendanceSessionPage() {
         action={
           <div className="flex flex-wrap gap-2">
             <Link
-              to={`/teacher/attendance/cards/${session.classId}`}
+              to={`/teacher/attendance/${session.id}/qr`}
               className="btn-ghost text-sm inline-flex items-center gap-2"
             >
-              <Printer size={15} aria-hidden /> {t("attendance.cardLink")}
+              <QrCode size={15} aria-hidden /> {t("attendance.qrPosterTitle")}
             </Link>
             <button
               type="button"
@@ -400,67 +365,14 @@ export function AttendanceSessionPage() {
 
       <div className="grid lg:grid-cols-[0.95fr_1.35fr] gap-6 items-start">
         <div className="space-y-4">
-          <section className="card p-4" aria-label={t("attendance.scanTitle")}>
+          <section className="card p-4" aria-label={t("attendance.qrTitle")}>
             <h2 className="font-display font-semibold mb-3 flex items-center gap-2">
-              <ClipboardCheck size={17} aria-hidden /> {t("attendance.scanTitle")}
+              <QrCode size={17} aria-hidden /> {t("attendance.qrTitle")}
             </h2>
-            <CameraScanner
-              disabled={closed}
-              onCode={(payload) => {
-                if (closed || scan.isPending) return;
-                scan.mutate(payload);
-              }}
+            <SessionQrCard
+              code={session.code}
+              hint={closed ? t("attendance.sessionClosedHint") : undefined}
             />
-
-            <form
-              className="mt-4"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!code.trim() || closed || scan.isPending) return;
-                scan.mutate(code.trim());
-              }}
-            >
-              <label htmlFor="scan-code" className="text-sm font-medium">
-                {t("attendance.scanInputLabel")}
-              </label>
-              <div className="flex flex-col sm:flex-row gap-2 mt-1">
-                <input
-                  ref={codeInputRef}
-                  id="scan-code"
-                  className="input font-mono2"
-                  placeholder={t("attendance.scanInputPlaceholder")}
-                  value={code}
-                  autoComplete="off"
-                  autoFocus
-                  disabled={closed}
-                  onChange={(e) => setCode(e.target.value)}
-                />
-                <button
-                  type="submit"
-                  className="btn-primary text-sm shrink-0 min-h-11 px-4 w-full sm:w-auto"
-                  disabled={closed || scan.isPending || code.trim().length === 0}
-                >
-                  {scan.isPending ? t("attendance.scanScanning") : t("attendance.scanSubmit")}
-                </button>
-              </div>
-            </form>
-
-            <div role="status" aria-live="polite" className="min-h-6 mt-2 text-sm">
-              {scanFeedback && (
-                <p
-                  style={{
-                    color:
-                      scanFeedback.tone === "error"
-                        ? "var(--danger)"
-                        : scanFeedback.tone === "warn"
-                          ? "var(--warn)"
-                          : "var(--ok)",
-                  }}
-                >
-                  {scanFeedback.text}
-                </p>
-              )}
-            </div>
           </section>
 
           <section className="card p-4" aria-label={t("attendance.summaryTitle")}>

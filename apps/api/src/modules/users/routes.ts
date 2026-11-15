@@ -91,7 +91,6 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
       passwordHash: await hashPassword(parsed.data.password),
       role: parsed.data.role,
       avatarUrl: null,
-      attendanceCode: null,
       isActive: true,
       createdAt: now,
       updatedAt: now,

@@ -2,17 +2,31 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { LoginSchema } from "@simpul/shared";
 import { useForm } from "react-hook-form";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
+import type { Role } from "@simpul/shared";
 import { Globe } from "lucide-react";
 import { ApiError } from "../../lib/api";
 import { useI18n, type Lang } from "../../lib/I18nContext";
 import { useAuth } from "./AuthContext";
 import { FieldError, PasswordInput } from "../../components/design-system/primitives";
 
+/** Tujuan setelah masuk: halaman asal (mis. QR `/absen/KODE`) bila cocok peran. */
+function landingFor(role: Role, from?: string): string {
+  const home = role === "admin" ? "/admin/dashboard" : role === "guru" ? "/teacher/dashboard" : "/student/dashboard";
+  if (!from) return home;
+  if (from.startsWith("/absen")) return role === "siswa" ? from : home;
+  if (role === "siswa" && from.startsWith("/student/")) return from;
+  if (role === "guru" && from.startsWith("/teacher/")) return from;
+  if (role === "admin" && from.startsWith("/admin/")) return from;
+  return home;
+}
+
 export function LoginPage() {
   const { login } = useAuth();
   const { t, lang, setLang } = useI18n();
   const nav = useNavigate();
+  const location = useLocation();
+  const from = (location.state as { from?: string } | null)?.from;
   const [serverError, setServerError] = useState<string | null>(null);
   const form = useForm<{ email: string; password: string }>({
     resolver: zodResolver(LoginSchema),
@@ -23,7 +37,7 @@ export function LoginPage() {
     setServerError(null);
     try {
       const user = await login(values.email, values.password);
-      nav(user.role === "admin" ? "/admin/dashboard" : user.role === "guru" ? "/teacher/dashboard" : "/student/dashboard", { replace: true });
+      nav(landingFor(user.role, from), { replace: true });
     } catch (e) {
       setServerError(e instanceof ApiError ? e.message : t("login.genericFail"));
     }

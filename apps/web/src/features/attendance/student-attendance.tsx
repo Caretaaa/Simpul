@@ -1,56 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { CalendarDays, Check } from "lucide-react";
-import { toDataURL } from "qrcode";
+import { CalendarDays, Check, QrCode } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/I18nContext";
-import { CopyButton, EmptyState, PageHeader, Skeleton } from "../../components/design-system/primitives";
+import { EmptyState, PageHeader, Skeleton } from "../../components/design-system/primitives";
+import { SessionCodeForm } from "./code-form";
 import {
   sessionDateIso,
   statusColor,
   statusKey,
-  type StudentAttendanceCard,
   type StudentAttendanceHistoryRow,
 } from "./types";
-
-function CardQr({ payload }: { payload: string }) {
-  const { t } = useI18n();
-  const [src, setSrc] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    toDataURL(payload, { margin: 1, width: 440, errorCorrectionLevel: "M" })
-      .then((url) => {
-        if (alive) setSrc(url);
-      })
-      .catch(() => {
-        if (alive) setFailed(true);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [payload]);
-
-  if (failed) {
-    return (
-      <p className="font-mono2 text-sm py-10" role="alert">
-        {payload}
-      </p>
-    );
-  }
-  if (!src) return <Skeleton className="w-full aspect-square max-w-[240px] mx-auto" label={t("common.loading")} />;
-  return (
-    <img
-      src={src}
-      alt={t("attendance.qrAlt")}
-      width={240}
-      height={240}
-      className="block mx-auto max-w-full"
-      style={{ imageRendering: "pixelated" }}
-    />
-  );
-}
 
 function StatusPill({ status }: { status: StudentAttendanceHistoryRow["status"] }) {
   const { t } = useI18n();
@@ -66,65 +25,31 @@ function StatusPill({ status }: { status: StudentAttendanceHistoryRow["status"] 
   );
 }
 
-/** Kartu absensi siswa (QR untuk dipindai guru) + riwayat kehadiran. */
-export function StudentAttendanceCardPage() {
+/** Riwayat kehadiran siswa + pintu masuk kode sesi dari QR guru. */
+export function StudentAttendancePage() {
   const { t, formatDate } = useI18n();
   const q = useQuery({
     queryKey: ["attendance-me"],
-    queryFn: () =>
-      api.get<{ card: StudentAttendanceCard; history: StudentAttendanceHistoryRow[] }>("/attendance/me"),
+    queryFn: () => api.get<{ classes: Array<{ id: string; name: string }>; history: StudentAttendanceHistoryRow[] }>(
+      "/attendance/me",
+    ),
   });
 
-  if (q.isLoading) {
-    return (
-      <div className="grid lg:grid-cols-[320px_1fr] gap-6">
-        <Skeleton className="h-96" />
-        <Skeleton className="h-96" />
-      </div>
-    );
-  }
+  const history = q.data?.history ?? [];
 
-  if (q.isError || !q.data) {
-    return (
-      <div>
-        <PageHeader no={t("attendance.studentNo")} title={t("attendance.studentTitle")} subtitle={t("attendance.studentSub")} />
-        <p role="alert" className="text-sm" style={{ color: "var(--danger)" }}>
-          {t("attendance.historyLoadFail")}
-        </p>
-      </div>
-    );
-  }
-
-  const { card, history } = q.data;
   return (
     <div>
-      <PageHeader
-        no={t("attendance.studentNo")}
-        title={t("attendance.studentTitle")}
-        subtitle={t("attendance.studentSub")}
-      />
+      <PageHeader no={t("attendance.studentNo")} title={t("attendance.studentTitle")} subtitle={t("attendance.studentSub")} />
 
-      <div className="grid lg:grid-cols-[320px_1fr] gap-6 items-start">
-        <section aria-label={t("attendance.studentTitle")}>
-          <div className="card overflow-hidden">
-            <div className="h-1.5" style={{ background: "var(--accent)" }} aria-hidden />
-            <div className="p-5 text-center">
-              <p className="tech-no">{t("attendance.cardFooter")}</p>
-              <p className="font-display text-xl font-bold mt-1 leading-tight">{card.name}</p>
-              <p className="text-sm mb-4" style={{ color: "var(--muted)" }}>
-                {card.className ?? "—"}
-              </p>
-              {/* Latar putih tetap agar QR kontras dan mudah dipindai di tema gelap. */}
-              <div className="rounded-lg border rule-line p-3" style={{ background: "#ffffff" }}>
-                <CardQr payload={card.qrPayload} />
-              </div>
-              <div className="mt-4 flex items-center justify-center gap-2">
-                <span className="tech-no">{t("attendance.codeLabel")}</span>
-                <code className="font-mono2 text-base font-semibold tracking-[0.18em]">{card.attendanceCode}</code>
-                <CopyButton text={card.attendanceCode} label={t("attendance.copyCode")} />
-              </div>
-            </div>
-          </div>
+      <div className="grid lg:grid-cols-[340px_1fr] gap-6 items-start">
+        <section className="card p-5" aria-label={t("attendance.codeFormTitle")}>
+          <h2 className="font-display font-semibold inline-flex items-center gap-2">
+            <QrCode size={17} aria-hidden /> {t("attendance.codeFormTitle")}
+          </h2>
+          <p className="text-xs mt-1 mb-3" style={{ color: "var(--muted)" }}>
+            {t("attendance.codeFormBody")}
+          </p>
+          <SessionCodeForm />
         </section>
 
         <section aria-label={t("attendance.historyTitle")}>
@@ -135,7 +60,17 @@ export function StudentAttendanceCardPage() {
             </p>
           </div>
 
-          {history.length === 0 ? (
+          {q.isLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-20" />
+              <Skeleton className="h-20" />
+              <Skeleton className="h-20" />
+            </div>
+          ) : q.isError ? (
+            <p role="alert" className="text-sm" style={{ color: "var(--danger)" }}>
+              {t("attendance.historyLoadFail")}
+            </p>
+          ) : history.length === 0 ? (
             <EmptyState title={t("attendance.historyEmpty")} body={t("attendance.historyEmptyBody")} />
           ) : (
             <ul className="space-y-2">
@@ -154,6 +89,7 @@ export function StudentAttendanceCardPage() {
                     <div className="text-right shrink-0">
                       <StatusPill status={row.status} />
                       <p className="text-[11px] mt-1" style={{ color: "var(--muted)" }}>
+                        {row.method === "manual" ? t("attendance.markedManual") : t("attendance.markedSelf")} ·{" "}
                         {formatDate(row.markedAt, true)}
                       </p>
                     </div>

@@ -474,12 +474,12 @@ describe("Pembuatan kelas oleh guru & admin", () => {
   });
 });
 
-describe("Absensi kehadiran", () => {
+describe("Absensi kehadiran (QR sesi per mata pelajaran)", () => {
   let guruId = "";
   let siswaId = "";
   let classId = "";
-  let attendanceCode = "";
   let sessionId = "";
+  let sessionCode = "";
 
   beforeAll(async () => {
     const db = getDb();
@@ -495,7 +495,7 @@ describe("Absensi kehadiran", () => {
     classId = CLASS_ID;
   });
 
-  it("guru melihat kelas absensi dan kartu QR siswa dibuat otomatis", async () => {
+  it("setiap sesi punya kode QR sendiri dan sesi yang sama bersifat idempoten", async () => {
     const guru = await login(DEMO.guru.email, DEMO.guru.password);
     const req = asSession(guru);
 
@@ -508,20 +508,6 @@ describe("Absensi kehadiran", () => {
     expect(row!.isHomeroom).toBe(true);
     expect(row!.memberCount).toBeGreaterThanOrEqual(1);
 
-    const cards = await req({ method: "GET", url: `/api/attendance/classes/${classId}/cards` });
-    expect(cards.statusCode).toBe(200);
-    const student = (cards.json().students as Array<{ id: string; name: string; attendanceCode: string }>).find(
-      (s) => s.id === siswaId,
-    );
-    expect(student).toBeTruthy();
-    expect(student!.attendanceCode).toMatch(/^[2-9A-HJ-NP-Z]{10}$/);
-    attendanceCode = student!.attendanceCode;
-  });
-
-  it("membuka sesi absensi bersifat idempoten untuk kelas+tanggal yang sama", async () => {
-    const guru = await login(DEMO.guru.email, DEMO.guru.password);
-    const req = asSession(guru);
-
     const first = await req({
       method: "POST", url: "/api/attendance/sessions",
       payload: { classId, date: "2026-02-10" },
@@ -530,10 +516,12 @@ describe("Absensi kehadiran", () => {
     expect(first.json().created).toBe(true);
     const session = first.json().session;
     sessionId = session.id as string;
+    sessionCode = session.code as string;
+    expect(sessionCode).toMatch(/^[2-9A-HJ-NP-Z]{8}$/);
     expect(session.status).toBe("open");
     expect(session.title).toBe("Absensi harian");
     expect(session.date).toBe("2026-02-10");
-    const roster = session.students as Array<{ id: string; attendanceCode: string; status: string | null }>;
+    const roster = session.students as Array<{ id: string; status: string | null }>;
     expect(roster.find((s) => s.id === siswaId)?.status).toBeNull();
     expect(session.summary.unmarked).toBe(session.summary.total);
 
@@ -544,6 +532,18 @@ describe("Absensi kehadiran", () => {
     expect(again.statusCode).toBe(200);
     expect(again.json().created).toBe(false);
     expect(again.json().session.id).toBe(sessionId);
+    expect(again.json().session.code).toBe(sessionCode);
+
+    // Sesi tanggal lain = QR lain, sehingga absensi tidak bertabrakan.
+    const other = await req({
+      method: "POST", url: "/api/attendance/sessions",
+      payload: { classId, date: "2026-02-11" },
+    });
+    expect(other.statusCode).toBe(201);
+    expect(other.json().session.code).not.toBe(sessionCode);
+    expect(other.json().session.code).toMatch(/^[2-9A-HJ-NP-Z]{8}$/);
+    const otherId = other.json().session.id as string;
+    expect((await req({ method: "DELETE", url: `/api/attendance/sessions/${otherId}` })).statusCode).toBe(200);
 
     const patched = await req({
       method: "PATCH", url: `/api/attendance/sessions/${sessionId}`,
@@ -551,44 +551,54 @@ describe("Absensi kehadiran", () => {
     });
     expect(patched.statusCode).toBe(200);
     expect(patched.json().session.title).toBe("Absensi Dasar Jaringan");
+    expect(patched.json().session.code).toBe(sessionCode);
 
     const list = await req({ method: "GET", url: `/api/attendance/sessions?classId=${classId}` });
     expect(list.statusCode).toBe(200);
-    expect((list.json().sessions as Array<{ id: string }>)[0]!.id).toBe(sessionId);
+    expect((list.json().sessions as Array<{ id: string; code: string }>)[0]!.id).toBe(sessionId);
+    expect((list.json().sessions as Array<{ id: string; code: string }>)[0]!.code).toBe(sessionCode);
   });
 
-  it("pindai kartu menandai hadir, duplikat terdeteksi, kode asing ditolak", async () => {
-    const guru = await login(DEMO.guru.email, DEMO.guru.password);
-    const req = asSession(guru);
+  it("siswa membuka kode sesi lalu menandai kehadirannya sendiri", async () => {
+    const siswa = await login(DEMO.siswa.email, DEMO.siswa.password);
+    const req = asSession(siswa);
 
-    const scan = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode } });
-    expect(scan.statusCode).toBe(200);
-    expect(scan.json().duplicate).toBe(false);
-    expect(scan.json().student.name).toContain("Siswa");
-    expect(scan.json().record.status).toBe("hadir");
-    expect(scan.json().record.method).toBe("scan");
+    const preview = await req({ method: "GET", url: `/api/attendance/sessions/by-code/${sessionCode}` });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().session.id).toBe(sessionId);
+    expect(preview.json().session.className).toBe("XI TKJ Uji");
+    expect(preview.json().session.myStatus).toBeNull();
+    expect(preview.json().session.status).toBe("open");
 
-    const dup = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode } });
-    expect(dup.statusCode).toBe(200);
-    expect(dup.json().duplicate).toBe(true);
+    // Kode yang diketik dengan tanda hubung/huruf kecil tetap diterima.
+    const dashed = `${sessionCode.slice(0, 4)}-${sessionCode.slice(4)}`.toLowerCase();
+    expect((await req({ method: "GET", url: `/api/attendance/sessions/by-code/${dashed}` })).statusCode).toBe(200);
 
-    // Isi QR lengkap dari kamera juga diterima.
-    const viaQr = await req({
-      method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`,
-      payload: { code: `SIMPUL:ATT:${attendanceCode.toLowerCase()}` },
-    });
-    expect(viaQr.statusCode).toBe(200);
-    expect(viaQr.json().duplicate).toBe(true);
+    const checkin = await req({ method: "POST", url: `/api/attendance/sessions/by-code/${sessionCode}/check-in` });
+    expect(checkin.statusCode).toBe(201);
+    expect(checkin.json().duplicate).toBe(false);
+    expect(checkin.json().record.status).toBe("hadir");
+    expect(checkin.json().record.method).toBe("scan");
+    expect(checkin.json().summary.hadir).toBe(1);
 
-    const unknown = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: "ZZZZZZZZZZ" } });
+    const twice = await req({ method: "POST", url: `/api/attendance/sessions/by-code/${sessionCode}/check-in` });
+    expect(twice.statusCode).toBe(200);
+    expect(twice.json().duplicate).toBe(true);
+    expect(twice.json().record.status).toBe("hadir");
+
+    const unknown = await req({ method: "GET", url: "/api/attendance/sessions/by-code/ZZZZZZZZ" });
     expect(unknown.statusCode).toBe(404);
+    const badCheckin = await req({ method: "POST", url: "/api/attendance/sessions/by-code/ZZZZZZZZ/check-in" });
+    expect(badCheckin.statusCode).toBe(404);
   });
 
-  it("guru dapat mengisi status manual, menghapus tanda, dan menolak non-anggota", async () => {
+  it("catatan guru tidak tertimpa check-in siswa, dan non-anggota ditolak", async () => {
     const guru = await login(DEMO.guru.email, DEMO.guru.password);
-    const req = asSession(guru);
+    const guruReq = asSession(guru);
+    const siswa = await login(DEMO.siswa.email, DEMO.siswa.password);
+    const siswaReq = asSession(siswa);
 
-    const izin = await req({
+    const izin = await guruReq({
       method: "POST", url: `/api/attendance/sessions/${sessionId}/records`,
       payload: { studentId: siswaId, status: "izin", note: "Acara sekolah" },
     });
@@ -599,12 +609,22 @@ describe("Absensi kehadiran", () => {
     expect(izin.json().summary.izin).toBe(1);
     expect(izin.json().summary.hadir).toBe(0);
 
-    const cleared = await req({
+    // Siswa tidak boleh menimpa izin yang dicatat guru.
+    const blocked = await siswaReq({ method: "POST", url: `/api/attendance/sessions/by-code/${sessionCode}/check-in` });
+    expect(blocked.statusCode).toBe(200);
+    expect(blocked.json().duplicate).toBe(true);
+    expect(blocked.json().record.status).toBe("izin");
+
+    const cleared = await guruReq({
       method: "POST", url: `/api/attendance/sessions/${sessionId}/records`,
       payload: { studentId: siswaId, status: null },
     });
     expect(cleared.statusCode).toBe(200);
     expect(cleared.json().record).toBeNull();
+
+    const fresh = await siswaReq({ method: "POST", url: `/api/attendance/sessions/by-code/${sessionCode}/check-in` });
+    expect(fresh.statusCode).toBe(201);
+    expect(fresh.json().record.status).toBe("hadir");
 
     const admin = await login(DEMO.admin.email, DEMO.admin.password);
     const outsider = await asSession(admin)({
@@ -613,52 +633,67 @@ describe("Absensi kehadiran", () => {
     });
     expect(outsider.statusCode).toBe(201);
     const outsiderId = outsider.json().user.id as string;
-    const denied = await req({
+
+    const deniedRecord = await guruReq({
       method: "POST", url: `/api/attendance/sessions/${sessionId}/records`,
       payload: { studentId: outsiderId, status: "hadir" },
     });
-    expect(denied.statusCode).toBe(404);
+    expect(deniedRecord.statusCode).toBe(404);
+
+    const outsiderLogin = await login("bukan.anggota@simpul.sch.id", "Anggota123!");
+    const outsiderReq = asSession(outsiderLogin);
+    expect((await outsiderReq({ method: "GET", url: `/api/attendance/sessions/by-code/${sessionCode}` })).statusCode).toBe(403);
+    expect(
+      (await outsiderReq({ method: "POST", url: `/api/attendance/sessions/by-code/${sessionCode}/check-in` })).statusCode,
+    ).toBe(403);
   });
 
-  it("sesi ditutup menolak perubahan kehadiran lalu dapat dibuka kembali", async () => {
+  it("sesi ditutup menolak check-in siswa lalu dapat dibuka kembali", async () => {
     const guru = await login(DEMO.guru.email, DEMO.guru.password);
-    const req = asSession(guru);
+    const guruReq = asSession(guru);
+    const siswa = await login(DEMO.siswa.email, DEMO.siswa.password);
+    const siswaReq = asSession(siswa);
 
-    const closed = await req({ method: "PATCH", url: `/api/attendance/sessions/${sessionId}`, payload: { status: "closed" } });
+    const closed = await guruReq({ method: "PATCH", url: `/api/attendance/sessions/${sessionId}`, payload: { status: "closed" } });
     expect(closed.statusCode).toBe(200);
     expect(closed.json().session.status).toBe("closed");
 
-    const scan = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode } });
-    expect(scan.statusCode).toBe(409);
-    const record = await req({
+    const checkin = await siswaReq({ method: "POST", url: `/api/attendance/sessions/by-code/${sessionCode}/check-in` });
+    expect(checkin.statusCode).toBe(409);
+    const record = await guruReq({
       method: "POST", url: `/api/attendance/sessions/${sessionId}/records`,
       payload: { studentId: siswaId, status: "hadir" },
     });
     expect(record.statusCode).toBe(409);
 
-    const reopened = await req({ method: "PATCH", url: `/api/attendance/sessions/${sessionId}`, payload: { status: "open" } });
+    const reopened = await guruReq({ method: "PATCH", url: `/api/attendance/sessions/${sessionId}`, payload: { status: "open" } });
     expect(reopened.statusCode).toBe(200);
-    const rescanned = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode } });
-    expect(rescanned.statusCode).toBe(200);
-    expect(rescanned.json().record.status).toBe("hadir");
+    const after = await siswaReq({ method: "POST", url: `/api/attendance/sessions/by-code/${sessionCode}/check-in` });
+    expect(after.statusCode).toBe(200);
+    expect(after.json().duplicate).toBe(true);
+    expect(after.json().record.status).toBe("hadir");
   });
 
-  it("siswa melihat kartu sendiri dan riwayat; guru lain serta siswa tidak boleh membuka sesi", async () => {
+  it("siswa hanya boleh melihat riwayat sendiri; guru lain dan siswa tidak boleh membuka rute guru", async () => {
     const siswa = await login(DEMO.siswa.email, DEMO.siswa.password);
     const siswaReq = asSession(siswa);
+
     const me = await siswaReq({ method: "GET", url: "/api/attendance/me" });
     expect(me.statusCode).toBe(200);
-    expect(me.json().card.attendanceCode).toBe(attendanceCode);
-    expect(me.json().card.qrPayload).toBe(`SIMPUL:ATT:${attendanceCode}`);
-    expect(me.json().card.className).toBe("XI TKJ Uji");
-    const history = me.json().history as Array<{ sessionId: string; status: string; date: string }>;
+    const history = me.json().history as Array<{ sessionId: string; status: string; date: string; className: string }>;
     expect(history[0]?.sessionId).toBe(sessionId);
     expect(history[0]?.status).toBe("hadir");
+    expect(history[0]?.className).toBe("XI TKJ Uji");
+    expect((me.json().classes as Array<{ name: string }>).some((k) => k.name === "XI TKJ Uji")).toBe(true);
 
-    const forbidden = await siswaReq({ method: "GET", url: `/api/attendance/sessions/${sessionId}` });
-    expect(forbidden.statusCode).toBe(403);
-    const teacherList = await siswaReq({ method: "GET", url: "/api/attendance/classes" });
-    expect(teacherList.statusCode).toBe(403);
+    expect((await siswaReq({ method: "GET", url: `/api/attendance/sessions/${sessionId}` })).statusCode).toBe(403);
+    expect((await siswaReq({ method: "GET", url: "/api/attendance/classes" })).statusCode).toBe(403);
+
+    // Guru tidak boleh memakai jalur siswa (check-in diri sendiri).
+    const guru = await login(DEMO.guru.email, DEMO.guru.password);
+    expect(
+      (await asSession(guru)({ method: "POST", url: `/api/attendance/sessions/by-code/${sessionCode}/check-in` })).statusCode,
+    ).toBe(403);
 
     // Guru lain tidak mengajar kelas itu.
     const admin = await login(DEMO.admin.email, DEMO.admin.password);
@@ -669,11 +704,7 @@ describe("Absensi kehadiran", () => {
     expect(created.statusCode).toBe(201);
     const other = await login("guru.lain@simpul.sch.id", "GuruLain123!");
     const otherReq = asSession(other);
-    const peek = await otherReq({ method: "GET", url: `/api/attendance/sessions/${sessionId}` });
-    expect(peek.statusCode).toBe(403);
-    const scanTry = await otherReq({
-      method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode },
-    });
-    expect(scanTry.statusCode).toBe(403);
+    expect((await otherReq({ method: "GET", url: `/api/attendance/sessions/${sessionId}` })).statusCode).toBe(403);
+    expect((await otherReq({ method: "GET", url: `/api/attendance/sessions/by-code/${sessionCode}` })).statusCode).toBe(403);
   });
 });

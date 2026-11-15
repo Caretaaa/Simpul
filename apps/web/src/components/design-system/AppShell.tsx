@@ -120,6 +120,7 @@ const TITLE_MAP: Array<[string, string]> = [
   ["/student/subnetting", "nav.practice"],
   ["/student/progress", "nav.progress"],
   ["/student/attendance", "nav.attendanceCard"],
+  ["/absen", "attendance.checkinNo"],
   ["/student/dashboard", "nav.dashboard"],
   ["/teacher/courses", "nav.courses"],
   ["/teacher/classes", "nav.classes"],

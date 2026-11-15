@@ -1,6 +1,6 @@
 import type { AttendanceStatus } from "@simpul/shared";
 
-/** Bentuk respons API absensi (lihat /tmp/opencode/attendance-contract.md). */
+/** Bentuk respons API absensi (QR sesi per mata pelajaran). */
 export interface AttendanceClass {
   id: string;
   name: string;
@@ -28,6 +28,8 @@ export interface AttendanceSessionSummary {
   title: string;
   date: string;
   status: "open" | "closed";
+  /** Kode sesi yang ditanam di QR — unik per kelas + mapel + tanggal. */
+  code: string;
   memberCount: number;
   markedCount: number;
   presentCount: number;
@@ -39,7 +41,6 @@ export interface AttendanceStudentRow {
   id: string;
   name: string;
   email: string;
-  attendanceCode: string | null;
   status: AttendanceStatus | null;
   method: "scan" | "manual" | null;
   note: string | null;
@@ -66,6 +67,7 @@ export interface AttendanceSessionDetail {
   title: string;
   date: string;
   status: "open" | "closed";
+  code: string;
   createdAt: string;
   updatedAt: string;
   createdByName: string | null;
@@ -73,11 +75,21 @@ export interface AttendanceSessionDetail {
   students: AttendanceStudentRow[];
 }
 
-export interface StudentAttendanceCard {
-  name: string;
-  className: string | null;
-  attendanceCode: string;
-  qrPayload: string;
+/** Pratinjau sesi dari kode QR seperti yang dilihat siswa. */
+export interface StudentSessionPreview {
+  id: string;
+  className: string;
+  title: string;
+  courseTitle: string | null;
+  date: string;
+  status: "open" | "closed";
+  code: string;
+  memberCount: number;
+  presentCount: number;
+  myStatus: AttendanceStatus | null;
+  myMethod: "scan" | "manual" | null;
+  myNote: string | null;
+  myMarkedAt: string | null;
 }
 
 export interface StudentAttendanceHistoryRow {
@@ -87,6 +99,7 @@ export interface StudentAttendanceHistoryRow {
   courseTitle: string | null;
   className: string;
   status: AttendanceStatus;
+  method: "scan" | "manual";
   note: string | null;
   markedAt: string;
 }

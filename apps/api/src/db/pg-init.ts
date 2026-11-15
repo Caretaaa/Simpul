@@ -221,13 +221,20 @@ CREATE TABLE IF NOT EXISTS attendance_records (
 );
 CREATE INDEX IF NOT EXISTS idx_att_records_session ON attendance_records(session_id);
 CREATE INDEX IF NOT EXISTS idx_att_records_student ON attendance_records(student_id);
+`;
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS attendance_code TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_users_attendance_code ON users(attendance_code);
+/**
+ * DDL versi 0003 — kode sesi absensi. Siswa memindai QR berisi tautan
+ * `/absen/<kode>`; satu kode unik per sesi (kelas + mata pelajaran + tanggal)
+ * sehingga absensi antar mata pelajaran tidak bertabrakan.
+ */
+export const PG_DDL_SESSION_CODE = /* sql */ `
+ALTER TABLE attendance_sessions ADD COLUMN IF NOT EXISTS code TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_att_sessions_code ON attendance_sessions(code);
 `;
 
 /** Gabungan seluruh chunk — acuan dokumentasi dan pemeriksaan jumlah statement. */
-export const PG_DDL = `${PG_DDL_CORE}\n${PG_DDL_ATTENDANCE}`;
+export const PG_DDL = `${PG_DDL_CORE}\n${PG_DDL_ATTENDANCE}\n${PG_DDL_SESSION_CODE}`;
 
 type PgClient = {
   unsafe: (query: string, params?: unknown[]) => Promise<unknown>;
@@ -237,15 +244,30 @@ interface DdlChunk {
   /** Versi yang dicatat di `_pg_ddl_applied`. */
   name: string;
   ddl: string;
-  /** Tabel penanda: ada berarti seluruh statement chunk benar-benar berjalan. */
-  sentinel: string;
+  /**
+   * Query penanda yang hanya bernilai benar bila chunk benar-benar diterapkan.
+   * Dipakai mendeteksi proxy yang hanya menjalankan statement pertama.
+   */
+  verify: string;
 }
 
 const DDL_CHUNKS: DdlChunk[] = [
-  // Sentinel = tabel yang dibuat paling akhir pada chunk, bukan yang pertama,
-  // agar batch yang hanya menjalankan statement pertama tetap terdeteksi.
-  { name: "0001", ddl: PG_DDL_CORE, sentinel: "class_memberships" },
-  { name: "0002", ddl: PG_DDL_ATTENDANCE, sentinel: "attendance_records" },
+  {
+    name: "0001",
+    ddl: PG_DDL_CORE,
+    verify: "SELECT to_regclass('public.class_memberships') IS NOT NULL AS ok",
+  },
+  {
+    name: "0002",
+    ddl: PG_DDL_ATTENDANCE,
+    verify: "SELECT to_regclass('public.attendance_records') IS NOT NULL AS ok",
+  },
+  {
+    name: "0003",
+    ddl: PG_DDL_SESSION_CODE,
+    verify:
+      "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'attendance_sessions' AND column_name = 'code') AS ok",
+  },
 ];
 
 function splitStatements(ddl: string): string[] {
@@ -256,10 +278,8 @@ function splitStatements(ddl: string): string[] {
 }
 
 async function chunkApplied(client: PgClient, chunk: DdlChunk): Promise<boolean> {
-  const rows = (await client.unsafe(
-    `SELECT to_regclass('public.${chunk.sentinel}') AS name`,
-  )) as Array<{ name?: string | null }>;
-  return Boolean(Array.isArray(rows) && rows[0]?.name);
+  const rows = (await client.unsafe(chunk.verify)) as Array<{ ok?: boolean }>;
+  return Boolean(Array.isArray(rows) && rows[0]?.ok);
 }
 
 /**
@@ -294,7 +314,7 @@ async function applyDdlChunk(client: PgClient, chunk: DdlChunk): Promise<void> {
 export async function ensurePgReady(client: PgClient): Promise<void> {
   await client.unsafe("CREATE TABLE IF NOT EXISTS _pg_ddl_applied (name TEXT PRIMARY KEY)");
   const applied = (await client.unsafe(
-    "SELECT name FROM _pg_ddl_applied WHERE name IN ('0001','0002')",
+    "SELECT name FROM _pg_ddl_applied WHERE name IN ('0001','0002','0003')",
   )) as Array<{ name?: string }>;
   const done = new Set(Array.isArray(applied) ? applied.map((row) => row.name) : []);
   for (const chunk of DDL_CHUNKS) {

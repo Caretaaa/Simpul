@@ -70,7 +70,16 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(fu
 });
 
 /** Tombol salin teks (kode/tautan) dengan umpan balik "Disalin!". */
-export function CopyButton({ text, label }: { text: string; label: string }) {
+export function CopyButton({
+  text,
+  label,
+  idleText = "Salin",
+}: {
+  text: string;
+  label: string;
+  /** Teks tombol saat belum disalin — pakai untuk membedakan kode vs tautan. */
+  idleText?: string;
+}) {
   const [copied, setCopied] = useState(false);
   async function copy() {
     try {
@@ -96,7 +105,7 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
       title={label}
     >
       {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
-      {copied ? "Disalin!" : "Salin"}
+      {copied ? "Disalin!" : idleText}
     </button>
   );
 }

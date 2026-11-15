@@ -1,9 +1,10 @@
 import { chromium, type Browser, type Page } from "playwright";
 
 /**
- * Verifikasi browser nyata untuk fitur absensi:
- * guru membuka sesi → tandai manual → pindai kode → tutup/buka → kartu QR,
- * lalu siswa melihat kartu + riwayat. Screenshot ke /tmp/opencode/simpul-shots.
+ * Verifikasi browser nyata untuk absensi QR per mata pelajaran:
+ * guru membuka sesi → QR sesi tampil → tandai manual → poster QR tercetak,
+ * lalu siswa membuka tautan QR (termasuk lewat login) dan check-in sendiri.
+ * Screenshot ke /tmp/opencode/simpul-shots.
  */
 const BASE = process.env.SIMPUL_BASE ?? "http://localhost:5173";
 const OUT = process.env.SIMPUL_SHOTS ?? "/tmp/opencode/simpul-shots";
@@ -50,7 +51,7 @@ async function login(page: Page, who: keyof typeof ACC): Promise<void> {
   await page.fill("#email", ACC[who].email);
   await page.fill("#password", ACC[who].password);
   await page.click('button[type="submit"]');
-  await page.waitForURL(`**/${who === "guru" ? "teacher" : "student"}/dashboard`, { timeout: 15000 });
+  await page.waitForURL(`**/${who === "guru" ? "teacher" : "student"}/dashboard`, { timeout: 20000 });
 }
 
 async function main(): Promise<void> {
@@ -78,70 +79,110 @@ async function main(): Promise<void> {
   await page.screenshot({ path: `${OUT}/attendance-hub.png`, fullPage: true });
   const classOptions = await page.locator("#att-class option").count();
   check("hub memuat pilihan kelas", classOptions > 0, `${classOptions} opsi`);
+  check("nav Absensi aktif untuk guru", (await page.locator('nav a[href="/teacher/attendance"]').count()) > 0);
   check(
-    "nav Absensi aktif untuk guru",
-    (await page.locator('nav a[href="/teacher/attendance"]').count()) > 0,
+    "hub tidak lagi menautkan kartu QR siswa",
+    (await page.locator('a[href*="/teacher/attendance/cards/"]').count()) === 0,
   );
 
   // ——— Buka / lanjutkan sesi hari ini
   await page.click('form[aria-label="Absensi kehadiran"] button[type="submit"]');
-  await page.waitForURL(/\/teacher\/attendance\/[0-9a-f-]{10,}/i, { timeout: 15000 });
-  await page.waitForSelector("#scan-code");
+  await page.waitForURL(/\/teacher\/attendance\/[0-9a-f-]{10,}/i, { timeout: 20000 });
+  await page.waitForSelector("section code.font-mono2");
   const sessionUrl = page.url();
+  const sessionId = sessionUrl.split("/").pop() ?? "";
   await page.screenshot({ path: `${OUT}/attendance-session.png`, fullPage: true });
   check("sesi absensi terbuka", /\/teacher\/attendance\//.test(sessionUrl), sessionUrl);
-  const summaryTotal = await page.locator("dl dd").last().textContent();
+
+  // ——— QR sesi tampil dengan kode 8 karakter
+  const qrImgs = await waitForCount(page, 'main img[alt^="QR absensi sesi"]');
+  const code = ((await page.textContent("section code.font-mono2")) ?? "").trim();
+  check("QR sesi dirender untuk guru", qrImgs > 0, `${qrImgs} QR`);
+  check("kode sesi 8 karakter tampil", /^[2-9A-HJ-NP-Z]{8}$/.test(code), code);
+  check(
+    "QR menautkan halaman check-in siswa",
+    (await page.locator(`main a[href$="/absen/${code}"]`).count()) > 0,
+    `/absen/${code}`,
+  );
+  const summaryTotal = await page.locator("main dl dd").last().textContent();
   check("ringkasan total siswa terbaca", Boolean(summaryTotal?.trim()), `unmarked=${summaryTotal?.trim()}`);
 
   // ——— Tandai manual siswa pertama
   const firstRow = page.locator("main ul > li.card").first();
   await firstRow.waitFor({ state: "visible" });
-  const firstCode = (await firstRow.locator(".font-mono2").first().textContent())?.trim() ?? "";
   await firstRow.getByRole("button", { name: "Hadir", exact: true }).click();
   const firstRowText = await waitForText(page, "main ul > li.card", /Manual/);
   check("status manual tersimpan", /Hadir/.test(firstRowText) && /Manual/.test(firstRowText), firstRowText.slice(0, 80));
-  check("kode kartu tampil di baris siswa", /^[2-9A-HJ-NP-Z]{10}$/.test(firstCode), firstCode);
 
-  // ——— Pindai kode (jalur input; pemindai barcode USB memakai jalur yang sama)
-  await page.fill("#scan-code", firstCode);
-  await page.press("#scan-code", "Enter");
-  const feedback = await waitForText(page, '[aria-live="polite"]', /(Kehadiran tercatat|sudah ditandai hadir|Status diperbarui)/);
+  // Kosongkan lagi agar siswa yang sama bisa menguji check-in QR di bawah.
+  await firstRow.getByRole("button", { name: "Hapus tanda" }).click();
+  const clearedText = await waitForText(page, "main ul > li.card", /Belum ditandai/);
+  check("tanda manual dapat dihapus", /Belum ditandai/.test(clearedText), clearedText.slice(0, 60));
+
+  // ——— Poster QR sesi
+  const qrLink = page.locator('main a[href*="/qr"]').first();
+  await qrLink.waitFor({ state: "visible" });
+  const qrHref = await qrLink.getAttribute("href");
+  await page.goto(`${BASE}${qrHref}`, { waitUntil: "networkidle" });
+  const posterQr = await waitForCount(page, "#attendance-qr-print img");
+  const posterText = (await page.textContent("#attendance-qr-print")) ?? "";
+  await page.screenshot({ path: `${OUT}/attendance-qr-poster.png`, fullPage: true });
+  check("poster QR sesi dirender", posterQr > 0, `${posterQr} QR`);
+  check("poster memuat kode sesi", posterText.includes(code), code);
+
+  // ——— Siswa: tautan QR → login → kembali ke check-in
+  const sctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: "id-ID" });
+  const sp = await sctx.newPage();
+  sp.on("pageerror", (e) => consoleErrors.push(String(e)));
+  sp.on("response", (r) => {
+    if (r.status() >= 400 && r.url().includes("/api/")) apiErrors.push(`${r.status()} ${new URL(r.url()).pathname}`);
+  });
+  await sp.goto(`${BASE}/absen/${code}`, { waitUntil: "networkidle" });
+  await sp.waitForURL(/\/login/, { timeout: 20000 });
+  await sp.fill("#email", ACC.siswa.email);
+  await sp.fill("#password", ACC.siswa.password);
+  await sp.click('button[type="submit"]');
+  await sp.waitForURL(`**/absen/${code}`, { timeout: 20000 });
+  const checkinText = await waitForText(sp, "main", /Konfirmasi kehadiran/);
+  check("QR membawa siswa kembali ke check-in setelah masuk", /Konfirmasi kehadiran/.test(checkinText));
+  check("check-in menampilkan kelas sesi", /XI TKJ/.test(checkinText), checkinText.slice(0, 80));
+
+  // ——— Siswa menandai kehadirannya sendiri
+  await sp.getByRole("button", { name: /Tandai kehadiran saya/ }).waitFor({ state: "visible", timeout: 25000 });
+  await sp.getByRole("button", { name: /Tandai kehadiran saya/ }).click();
+  const doneText = await waitForText(sp, "main", /Kehadiran Anda tercatat|sudah tercatat/);
+  check("check-in siswa tercatat", /Kehadiran Anda tercatat|sudah tercatat/.test(doneText));
+  await sp.screenshot({ path: `${OUT}/attendance-student-checkin.png`, fullPage: true });
+
+  await sp.reload({ waitUntil: "networkidle" });
+  const repeatText = await waitForText(sp, "main", /sudah tercatat/);
+  check("membuka ulang QR tidak menggandakan catatan", /sudah tercatat/.test(repeatText));
+  check("check-in berulang tidak menampilkan tombol", (await sp.getByRole("button", { name: /Tandai kehadiran saya/ }).count()) === 0);
+
+  // ——— Kode asing ditolak dengan pesan jelas
+  await sp.goto(`${BASE}/absen/ZZZZZZZZ`, { waitUntil: "networkidle" });
+  const badText = await waitForText(sp, "main", /Kode tidak dikenali/);
+  check("kode sesi asing ditolak dengan pesan", /Kode tidak dikenali/.test(badText));
+
+  // ——— Riwayat siswa
+  await sp.goto(`${BASE}/student/attendance`, { waitUntil: "networkidle" });
+  const historyText = await waitForText(sp, "main", /Riwayat kehadiran/);
+  await sp.screenshot({ path: `${OUT}/attendance-student.png`, fullPage: true });
   check(
-    "hasil pindai memberi umpan balik",
-    /(Kehadiran tercatat|sudah ditandai hadir|Status diperbarui)/.test(feedback),
-    feedback.trim(),
+    "riwayat kehadiran siswa memuat sesi",
+    /Riwayat kehadiran/.test(historyText) && /Hadir|Terlambat|Izin|Sakit|Alpa/.test(historyText),
+  );
+  check(
+    "halaman siswa hanya menampilkan formulir kode, bukan kartu QR pribadi",
+    (await sp.locator("#attendance-code").count()) === 1 && (await sp.locator('img[alt*="QR kartu"]').count()) === 0,
   );
 
-  // ——— Pindai kode asing ditolak
-  await page.fill("#scan-code", "ZZZZZZZZZZ");
-  await page.press("#scan-code", "Enter");
-  const badFeedback = await waitForText(page, '[aria-live="polite"]', /tidak dikenali/);
-  check("kode asing ditolak dengan pesan", /tidak dikenali/.test(badFeedback), badFeedback.trim());
+  // ——— Guru melihat check-in siswa pada sesi yang sama
+  await page.goto(sessionUrl, { waitUntil: "networkidle" });
+  const liveText = await waitForText(page, "main", /Check-in QR/);
+  check("guru melihat status check-in siswa", /Check-in QR/.test(liveText));
 
-  // ——— Tutup lalu buka kembali
-  const closeBtn = page.getByRole("button", { name: /Tutup sesi/ });
-  if ((await closeBtn.count()) > 0) {
-    await closeBtn.click();
-    const bodyClosed = await waitForText(page, "main", /Ditutup/);
-    check("sesi dapat ditutup", /Ditutup/.test(bodyClosed));
-    await page.getByRole("button", { name: /Buka kembali sesi/ }).click();
-    await waitForText(page, "main", /Berlangsung/);
-  } else {
-    check("tombol tutup sesi tersedia", false);
-  }
-
-  // ——— Kartu QR kelas
-  const cardsLink = page.locator('main a[href*="/teacher/attendance/cards/"]').first();
-  await cardsLink.waitFor({ state: "visible" });
-  const cardsHref = await cardsLink.getAttribute("href");
-  await page.goto(`${BASE}${cardsHref}`, { waitUntil: "networkidle" });
-  const qrCount = await waitForCount(page, "#attendance-print img");
-  const cardsText = (await page.textContent("main")) ?? "";
-  await page.screenshot({ path: `${OUT}/attendance-cards.png`, fullPage: true });
-  check("kartu QR siswa dirender", qrCount > 0, `${qrCount} QR`);
-  check("kartu memuat kode siswa", /[2-9A-HJ-NP-Z]{10}/.test(cardsText));
-
-  // ——— Tampilan sesi di ponsel
+  // ——— Tampilan ponsel: sesi guru dan check-in siswa
   const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: "id-ID", isMobile: true, hasTouch: true });
   const mp = await mobile.newPage();
   await login(mp, "guru");
@@ -152,35 +193,27 @@ async function main(): Promise<void> {
   check("sesi tidak meluber horizontal di ponsel", overflow <= 1, `overflow=${overflow}px`);
   await mobile.close();
 
-  // ——— Siswa: kartu + riwayat
-  const sctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: "id-ID" });
-  const sp = await sctx.newPage();
-  sp.on("pageerror", (e) => consoleErrors.push(String(e)));
-  await login(sp, "siswa");
-  await sp.goto(`${BASE}/student/attendance`, { waitUntil: "networkidle" });
-  const studentQr = await waitForCount(sp, 'img[alt="QR kartu absensi"]');
-  const studentBody = (await sp.textContent("main")) ?? "";
-  await sp.screenshot({ path: `${OUT}/attendance-student.png`, fullPage: true });
-  check("siswa melihat QR kartu", studentQr > 0);
-  check("riwayat kehadiran siswa memuat sesi", /Riwayat kehadiran/.test(studentBody) && /Hadir|Terlambat|Izin|Sakit|Alpa/.test(studentBody));
-  check("kartu siswa menampilkan kelas", /XI TKJ/.test(studentBody), studentBody.slice(0, 60));
-
   const mobileS = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: "id-ID", isMobile: true, hasTouch: true });
   const msp = await mobileS.newPage();
   await login(msp, "siswa");
-  await msp.goto(`${BASE}/student/attendance`, { waitUntil: "networkidle" });
-  await waitForCount(msp, 'img[alt="QR kartu absensi"]');
+  await msp.goto(`${BASE}/absen/${code}`, { waitUntil: "networkidle" });
+  await waitForText(msp, "main", /Konfirmasi kehadiran/);
   await msp.screenshot({ path: `${OUT}/attendance-student-mobile.png`, fullPage: true });
   const sOverflow = await msp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-  check("kartu siswa tidak meluber di ponsel", sOverflow <= 1, `overflow=${sOverflow}px`);
+  check("check-in siswa tidak meluber di ponsel", sOverflow <= 1, `overflow=${sOverflow}px`);
   await mobileS.close();
 
-  // Dikecualikan: 401 /auth/me (pemeriksaan sesi di halaman login) dan 404 scan
-  // yang sengaja dipicu oleh uji "kode asing ditolak" di atas.
+  // ——— Bersihkan sesi uji agar database tidak menumpuk
+  const cleanup = await page.evaluate(async (id) => {
+    const res = await fetch(`/api/attendance/sessions/${id}`, { method: "DELETE", credentials: "include" });
+    return res.status;
+  }, sessionId);
+  check("sesi uji dihapus", cleanup === 200, `status ${cleanup}`);
+
+  // Dikecualikan: 401 /auth/me (pemeriksaan sesi di halaman login) dan 404
+  // kode asing yang sengaja dipicu uji di atas.
   const unexpectedApiErrors = apiErrors.filter(
-    (e) =>
-      !/^401 \/api\/auth\/me/.test(e) &&
-      !/^404 \/api\/attendance\/sessions\/[^/]+\/scan/.test(e),
+    (e) => !/^401 \/api\/auth\/me/.test(e) && !/^404 \/api\/attendance\/sessions\/by-code\/ZZZZZZZZ/.test(e),
   );
   check("tanpa galat API tak terduga", unexpectedApiErrors.length === 0, unexpectedApiErrors.slice(0, 3).join(" | "));
   check(

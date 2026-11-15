@@ -68,11 +68,11 @@ Reset kata sandi: `POST /api/auth/password-reset/request` mengembalikan
 `devToken` **hanya saat `NODE_ENV !== production`** (tanpa SMTP). Token sekali
 pakai, kedaluwarsa 30 menit: `POST /api/auth/password-reset/resolve`.
 
-**Absensi kehadiran**: guru membuka *Absensi* → pilih kelas/tanggal → sesi.
-Di dalam sesi, pindai kartu QR siswa dengan kamera (atau pemindai barcode USB /
-ketik kode) maupun tandai daftar hadir manual. Kartu QR seluruh siswa kelas
-dapat dicetak dari halaman sesi; siswa menunjukkan kartunya di halaman
-*Kartu absensi*. Rincian: `docs/14-absensi.md`.
+**Absensi kehadiran**: guru membuka *Absensi* → pilih kelas/mapel/tanggal →
+sesi. Setiap sesi menampilkan QR sendiri; siswa memindai dengan kamera ponsel,
+masuk, lalu menekan *Tandai kehadiran saya* di `/absen/<KODE>`. Guru tetap dapat
+menandai daftar hadir manual, mencetak poster QR sesi, dan memantau hitungan
+hadir yang menyegarkan sendiri. Rincian: `docs/14-absensi.md`.
 
 ## Tes
 ```bash
