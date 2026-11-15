@@ -97,3 +97,13 @@ Catatan pengujian kamera: jalur pindai diuji lewat kolom kode (jalur yang sama
 dengan pemindai barcode USB). Dekode kamera memakai `jsQR` dan memerlukan
 HTTPS/`localhost`; bukan cakupan otomatis headless.
 
+
+## Catatan deploy (Vercel/Neon)
+
+DDL Postgres di `pg-init.ts` dipisah dua chunk berversi: `0001` (skema inti) dan
+`0002` (tabel absensi + `users.attendance_code`). Deploy lama hanya menjalankan
+chunk `0002`. Setiap chunk dikirim sebagai **satu query** (simple query Neon
+mengeksekusi banyak statement dalam satu round-trip, implicit transaction) agar
+cold start tetap di bawah batas 10 detik fungsi Vercel; bila proxy menolak atau
+hanya menjalankan statement pertama (diperiksa lewat `to_regclass` pada tabel
+sentinel), chunk diulang per statement karena seluruh DDL idempoten.
