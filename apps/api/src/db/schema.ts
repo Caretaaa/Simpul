@@ -31,6 +31,8 @@ export const notifications = S.notifications as unknown as typeof sqliteSchema.n
 export const competencies = S.competencies as unknown as typeof sqliteSchema.competencies;
 export const courseCompetencies = S.courseCompetencies as unknown as typeof sqliteSchema.courseCompetencies;
 export const passwordResetTokens = S.passwordResetTokens as unknown as typeof sqliteSchema.passwordResetTokens;
+export const attendanceSessions = S.attendanceSessions as unknown as typeof sqliteSchema.attendanceSessions;
+export const attendanceRecords = S.attendanceRecords as unknown as typeof sqliteSchema.attendanceRecords;
 
 export type User = typeof users.$inferSelect;
 export type Role = User["role"];

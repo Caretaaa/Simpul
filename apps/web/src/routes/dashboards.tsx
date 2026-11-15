@@ -535,6 +535,9 @@ export function TeacherDashboard() {
           </div>
           <nav className="card p-5 space-y-2" aria-label={t("teacher.quickActions")}>
             <p className="tech-no mb-1">{t("teacher.quickActions")}</p>
+            <Link to="/teacher/attendance" className="block text-sm font-medium py-1" style={{ color: "var(--accent)" }}>
+              {t("nav.attendance")} →
+            </Link>
             <Link to="/teacher/classes" className="block text-sm font-medium py-1" style={{ color: "var(--accent)" }}>
               {t("teacher.shareCode")} →
             </Link>

@@ -8,7 +8,8 @@ import { buildApp } from "./app.js";
 import { loadEnv } from "./config.js";
 import { __resetDb, getDb } from "./db/connection.js";
 import { migrate } from "./db/migrate.js";
-import { academicYears, classes, subjects, users } from "./db/schema.js";
+import { eq } from "drizzle-orm";
+import { academicYears, classMemberships, classes, subjects, users } from "./db/schema.js";
 import { hashPassword } from "./middleware/auth.js";
 
 const DEMO = {
@@ -470,5 +471,209 @@ describe("Pembuatan kelas oleh guru & admin", () => {
     // Siswa tak dikenal ditolak.
     const badStudent = await adminReq({ method: "PATCH", url: `/api/classes/${classId}`, payload: { studentIds: ["tidak-ada"] } });
     expect(badStudent.statusCode).toBe(400);
+  });
+});
+
+describe("Absensi kehadiran", () => {
+  let guruId = "";
+  let siswaId = "";
+  let classId = "";
+  let attendanceCode = "";
+  let sessionId = "";
+
+  beforeAll(async () => {
+    const db = getDb();
+    const allUsers = await db.select().from(users);
+    guruId = allUsers.find((u) => u.email === DEMO.guru.email)!.id;
+    siswaId = allUsers.find((u) => u.email === DEMO.siswa.email)!.id;
+    // Kelas uji dijadikan kelas wali guru, dengan satu siswa anggota.
+    await db.update(classes).set({ homeroomTeacherId: guruId }).where(eq(classes.id, CLASS_ID));
+    const members = await db.select().from(classMemberships).where(eq(classMemberships.classId, CLASS_ID));
+    if (!members.some((m) => m.studentId === siswaId)) {
+      await db.insert(classMemberships).values({ id: randomUUID(), classId: CLASS_ID, studentId: siswaId, joinedAt: new Date() });
+    }
+    classId = CLASS_ID;
+  });
+
+  it("guru melihat kelas absensi dan kartu QR siswa dibuat otomatis", async () => {
+    const guru = await login(DEMO.guru.email, DEMO.guru.password);
+    const req = asSession(guru);
+
+    const classesRes = await req({ method: "GET", url: "/api/attendance/classes" });
+    expect(classesRes.statusCode).toBe(200);
+    const row = (classesRes.json().classes as Array<{ id: string; memberCount: number; isHomeroom: boolean }>).find(
+      (c) => c.id === classId,
+    );
+    expect(row).toBeTruthy();
+    expect(row!.isHomeroom).toBe(true);
+    expect(row!.memberCount).toBeGreaterThanOrEqual(1);
+
+    const cards = await req({ method: "GET", url: `/api/attendance/classes/${classId}/cards` });
+    expect(cards.statusCode).toBe(200);
+    const student = (cards.json().students as Array<{ id: string; name: string; attendanceCode: string }>).find(
+      (s) => s.id === siswaId,
+    );
+    expect(student).toBeTruthy();
+    expect(student!.attendanceCode).toMatch(/^[2-9A-HJ-NP-Z]{10}$/);
+    attendanceCode = student!.attendanceCode;
+  });
+
+  it("membuka sesi absensi bersifat idempoten untuk kelas+tanggal yang sama", async () => {
+    const guru = await login(DEMO.guru.email, DEMO.guru.password);
+    const req = asSession(guru);
+
+    const first = await req({
+      method: "POST", url: "/api/attendance/sessions",
+      payload: { classId, date: "2026-02-10" },
+    });
+    expect(first.statusCode).toBe(201);
+    expect(first.json().created).toBe(true);
+    const session = first.json().session;
+    sessionId = session.id as string;
+    expect(session.status).toBe("open");
+    expect(session.title).toBe("Absensi harian");
+    expect(session.date).toBe("2026-02-10");
+    const roster = session.students as Array<{ id: string; attendanceCode: string; status: string | null }>;
+    expect(roster.find((s) => s.id === siswaId)?.status).toBeNull();
+    expect(session.summary.unmarked).toBe(session.summary.total);
+
+    const again = await req({
+      method: "POST", url: "/api/attendance/sessions",
+      payload: { classId, date: "2026-02-10" },
+    });
+    expect(again.statusCode).toBe(200);
+    expect(again.json().created).toBe(false);
+    expect(again.json().session.id).toBe(sessionId);
+
+    const patched = await req({
+      method: "PATCH", url: `/api/attendance/sessions/${sessionId}`,
+      payload: { title: "Absensi Dasar Jaringan" },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().session.title).toBe("Absensi Dasar Jaringan");
+
+    const list = await req({ method: "GET", url: `/api/attendance/sessions?classId=${classId}` });
+    expect(list.statusCode).toBe(200);
+    expect((list.json().sessions as Array<{ id: string }>)[0]!.id).toBe(sessionId);
+  });
+
+  it("pindai kartu menandai hadir, duplikat terdeteksi, kode asing ditolak", async () => {
+    const guru = await login(DEMO.guru.email, DEMO.guru.password);
+    const req = asSession(guru);
+
+    const scan = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode } });
+    expect(scan.statusCode).toBe(200);
+    expect(scan.json().duplicate).toBe(false);
+    expect(scan.json().student.name).toContain("Siswa");
+    expect(scan.json().record.status).toBe("hadir");
+    expect(scan.json().record.method).toBe("scan");
+
+    const dup = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode } });
+    expect(dup.statusCode).toBe(200);
+    expect(dup.json().duplicate).toBe(true);
+
+    // Isi QR lengkap dari kamera juga diterima.
+    const viaQr = await req({
+      method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`,
+      payload: { code: `SIMPUL:ATT:${attendanceCode.toLowerCase()}` },
+    });
+    expect(viaQr.statusCode).toBe(200);
+    expect(viaQr.json().duplicate).toBe(true);
+
+    const unknown = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: "ZZZZZZZZZZ" } });
+    expect(unknown.statusCode).toBe(404);
+  });
+
+  it("guru dapat mengisi status manual, menghapus tanda, dan menolak non-anggota", async () => {
+    const guru = await login(DEMO.guru.email, DEMO.guru.password);
+    const req = asSession(guru);
+
+    const izin = await req({
+      method: "POST", url: `/api/attendance/sessions/${sessionId}/records`,
+      payload: { studentId: siswaId, status: "izin", note: "Acara sekolah" },
+    });
+    expect(izin.statusCode).toBe(200);
+    expect(izin.json().record.status).toBe("izin");
+    expect(izin.json().record.method).toBe("manual");
+    expect(izin.json().record.note).toBe("Acara sekolah");
+    expect(izin.json().summary.izin).toBe(1);
+    expect(izin.json().summary.hadir).toBe(0);
+
+    const cleared = await req({
+      method: "POST", url: `/api/attendance/sessions/${sessionId}/records`,
+      payload: { studentId: siswaId, status: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().record).toBeNull();
+
+    const admin = await login(DEMO.admin.email, DEMO.admin.password);
+    const outsider = await asSession(admin)({
+      method: "POST", url: "/api/users",
+      payload: { email: "bukan.anggota@simpul.sch.id", name: "Bukan Anggota", password: "Anggota123!", role: "siswa" },
+    });
+    expect(outsider.statusCode).toBe(201);
+    const outsiderId = outsider.json().user.id as string;
+    const denied = await req({
+      method: "POST", url: `/api/attendance/sessions/${sessionId}/records`,
+      payload: { studentId: outsiderId, status: "hadir" },
+    });
+    expect(denied.statusCode).toBe(404);
+  });
+
+  it("sesi ditutup menolak perubahan kehadiran lalu dapat dibuka kembali", async () => {
+    const guru = await login(DEMO.guru.email, DEMO.guru.password);
+    const req = asSession(guru);
+
+    const closed = await req({ method: "PATCH", url: `/api/attendance/sessions/${sessionId}`, payload: { status: "closed" } });
+    expect(closed.statusCode).toBe(200);
+    expect(closed.json().session.status).toBe("closed");
+
+    const scan = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode } });
+    expect(scan.statusCode).toBe(409);
+    const record = await req({
+      method: "POST", url: `/api/attendance/sessions/${sessionId}/records`,
+      payload: { studentId: siswaId, status: "hadir" },
+    });
+    expect(record.statusCode).toBe(409);
+
+    const reopened = await req({ method: "PATCH", url: `/api/attendance/sessions/${sessionId}`, payload: { status: "open" } });
+    expect(reopened.statusCode).toBe(200);
+    const rescanned = await req({ method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode } });
+    expect(rescanned.statusCode).toBe(200);
+    expect(rescanned.json().record.status).toBe("hadir");
+  });
+
+  it("siswa melihat kartu sendiri dan riwayat; guru lain serta siswa tidak boleh membuka sesi", async () => {
+    const siswa = await login(DEMO.siswa.email, DEMO.siswa.password);
+    const siswaReq = asSession(siswa);
+    const me = await siswaReq({ method: "GET", url: "/api/attendance/me" });
+    expect(me.statusCode).toBe(200);
+    expect(me.json().card.attendanceCode).toBe(attendanceCode);
+    expect(me.json().card.qrPayload).toBe(`SIMPUL:ATT:${attendanceCode}`);
+    expect(me.json().card.className).toBe("XI TKJ Uji");
+    const history = me.json().history as Array<{ sessionId: string; status: string; date: string }>;
+    expect(history[0]?.sessionId).toBe(sessionId);
+    expect(history[0]?.status).toBe("hadir");
+
+    const forbidden = await siswaReq({ method: "GET", url: `/api/attendance/sessions/${sessionId}` });
+    expect(forbidden.statusCode).toBe(403);
+    const teacherList = await siswaReq({ method: "GET", url: "/api/attendance/classes" });
+    expect(teacherList.statusCode).toBe(403);
+
+    // Guru lain tidak mengajar kelas itu.
+    const admin = await login(DEMO.admin.email, DEMO.admin.password);
+    const created = await asSession(admin)({
+      method: "POST", url: "/api/users",
+      payload: { email: "guru.lain@simpul.sch.id", name: "Guru Lain", password: "GuruLain123!", role: "guru" },
+    });
+    expect(created.statusCode).toBe(201);
+    const other = await login("guru.lain@simpul.sch.id", "GuruLain123!");
+    const otherReq = asSession(other);
+    const peek = await otherReq({ method: "GET", url: `/api/attendance/sessions/${sessionId}` });
+    expect(peek.statusCode).toBe(403);
+    const scanTry = await otherReq({
+      method: "POST", url: `/api/attendance/sessions/${sessionId}/scan`, payload: { code: attendanceCode },
+    });
+    expect(scanTry.statusCode).toBe(403);
   });
 });

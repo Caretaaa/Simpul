@@ -6,6 +6,7 @@ import { loadEnv } from "./config.js";
 import { authPlugin } from "./middleware/auth.js";
 import { academicYearRoutes } from "./modules/academic-years/routes.js";
 import { announcementRoutes } from "./modules/announcements/routes.js";
+import { attendanceRoutes } from "./modules/attendance/routes.js";
 import { authRoutes } from "./modules/auth/routes.js";
 import { classRoutes } from "./modules/classes/routes.js";
 import {
@@ -43,6 +44,7 @@ export async function buildApp(env = loadEnv()): Promise<FastifyInstance> {
   await enrollmentRoutes(app);
   await progressRoutes(app);
   await app.register(announcementRoutes, { prefix: "/api/announcements" });
+  await app.register(attendanceRoutes, { prefix: "/api/attendance" });
   await app.register(competencyRoutes, { prefix: "/api/competencies" });
 
   app.setErrorHandler((err: FastifyError, _req, reply) => {

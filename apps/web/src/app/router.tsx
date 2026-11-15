@@ -21,6 +21,10 @@ import { TeacherCoursesPage } from "../features/teacher/teacher-courses";
 import { TeacherClassesPage } from "../features/teacher/teacher-classes";
 import { CourseEditorPage } from "../features/teacher/course-editor";
 import { JoinClassPage } from "../features/classes/class-join";
+import { TeacherAttendancePage } from "../features/attendance/attendance-hub";
+import { AttendanceSessionPage } from "../features/attendance/attendance-session";
+import { AttendanceCardsPage } from "../features/attendance/attendance-cards";
+import { StudentAttendanceCardPage } from "../features/attendance/student-attendance";
 import {
   StudentCourseDetailPage,
   StudentCoursesPage,
@@ -60,6 +64,7 @@ export const router = createBrowserRouter([
       { path: "/student/quizzes/:quizId", element: <DemoQuizRunnerPage /> },
       { path: "/student/subnetting", element: <DemoSubnetPage /> },
       { path: "/student/progress", element: <StudentProgressPage /> },
+      { path: "/student/attendance", element: <StudentAttendanceCardPage /> },
     ],
   },
   {
@@ -74,6 +79,9 @@ export const router = createBrowserRouter([
       { path: "/teacher/submissions", element: <PlaceholderPage no="TCH-SUB" title="Kiriman masuk" body="Antrean penilaian tugas dan lab hadir di Phase 3." /> },
       { path: "/teacher/assessments", element: <PlaceholderPage no="TCH-ASS" title="Asesmen & rubrik" body="Bank soal, rubrik kompetensi, dan capaian kelas hadir di Phase 3." /> },
       { path: "/teacher/classes", element: <TeacherClassesPage /> },
+      { path: "/teacher/attendance", element: <TeacherAttendancePage /> },
+      { path: "/teacher/attendance/cards/:classId", element: <AttendanceCardsPage /> },
+      { path: "/teacher/attendance/:sessionId", element: <AttendanceSessionPage /> },
     ],
   },
   {

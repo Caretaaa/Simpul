@@ -13,7 +13,7 @@ memakai Bahasa Indonesia yang natural.
 | Fase | Status | Isi terverifikasi |
 |---|---|---|
 | 1 — Fondasi | ✅ Selesai | Arsitektur, IA, rute + guard, skema DB + migrasi + seed, auth cookie + RBAC, token desain dual-theme, app shell responsif, PWA (manifest/SW/ikon) |
-| 2 — Core LMS | ✅ Selesai | Manajemen pengguna/kelas/mapel/tahun ajaran (admin), kursus draft→terbit, modul & materi, enrollmen, **gabung kelas via kode + tautan**, progres materi, pengumuman, reset kata sandi |
+| 2 — Core LMS | ✅ Selesai | Manajemen pengguna/kelas/mapel/tahun ajaran (admin), kursus draft→terbit, modul & materi, enrollmen, **gabung kelas via kode + tautan**, progres materi, pengumuman, reset kata sandi, **absensi kehadiran (scan kartu QR + daftar manual)** |
 | 3 — Vokasional | ⏳ Berikutnya | Lab Workspace + rubrik, tugas & kiriman berkas, kuis (skor server-side), kompetensi terhitung, alat subnetting |
 | 4 — PWA penuh | ⏳ Berikutnya | Materi tersimpan luring, IndexedDB, antrean sinkronisasi idempoten |
 | 5 — Hardening | ⏳ Berikutnya | E2E Playwright, audit a11y/keamanan, performa, deployment |
@@ -67,6 +67,12 @@ via tombol *Kelola wali & siswa* pada tiap kartu kelas.
 Reset kata sandi: `POST /api/auth/password-reset/request` mengembalikan
 `devToken` **hanya saat `NODE_ENV !== production`** (tanpa SMTP). Token sekali
 pakai, kedaluwarsa 30 menit: `POST /api/auth/password-reset/resolve`.
+
+**Absensi kehadiran**: guru membuka *Absensi* → pilih kelas/tanggal → sesi.
+Di dalam sesi, pindai kartu QR siswa dengan kamera (atau pemindai barcode USB /
+ketik kode) maupun tandai daftar hadir manual. Kartu QR seluruh siswa kelas
+dapat dicetak dari halaman sesi; siswa menunjukkan kartunya di halaman
+*Kartu absensi*. Rincian: `docs/14-absensi.md`.
 
 ## Tes
 ```bash

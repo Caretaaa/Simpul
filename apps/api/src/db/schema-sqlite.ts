@@ -18,6 +18,8 @@ export const users = sqliteTable("users", {
   passwordHash: text("password_hash").notNull(),
   role: text("role", { enum: ["admin", "guru", "siswa"] }).notNull(),
   avatarUrl: text("avatar_url"),
+  /** Kode kartu absensi 10 karakter (unik) — diisi malas saat pertama dibutuhkan. */
+  attendanceCode: text("attendance_code"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -174,6 +176,32 @@ export const passwordResetTokens = sqliteTable("password_reset_tokens", {
   expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
   usedAt: integer("used_at", { mode: "timestamp_ms" }),
   createdAt: createdAt(),
+});
+
+/** Sesi absensi satu kelas pada satu tanggal (opsional per mata pelajaran). */
+export const attendanceSessions = sqliteTable("attendance_sessions", {
+  id: id(),
+  classId: text("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
+  courseId: text("course_id").references(() => courses.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  /** Tanggal sekolah "YYYY-MM-DD" (tanpa zona waktu). */
+  date: text("date").notNull(),
+  status: text("status", { enum: ["open", "closed"] }).notNull().default("open"),
+  createdBy: text("created_by").references(() => users.id),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+/** Kehadiran satu siswa pada satu sesi (unik per sesi+siswa). */
+export const attendanceRecords = sqliteTable("attendance_records", {
+  id: id(),
+  sessionId: text("session_id").notNull().references(() => attendanceSessions.id, { onDelete: "cascade" }),
+  studentId: text("student_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: text("status", { enum: ["hadir", "terlambat", "izin", "sakit", "alpa"] }).notNull(),
+  method: text("method", { enum: ["scan", "manual"] }).notNull().default("manual"),
+  note: text("note"),
+  markedBy: text("marked_by").references(() => users.id),
+  markedAt: integer("marked_at", { mode: "timestamp_ms" }).notNull(),
 });
 
 export type User = typeof users.$inferSelect;

@@ -210,3 +210,32 @@ info "Format yang diizinkan guru" tampil, `jawaban.txt` ditolak, `laporan-subnet
 diterima → chip tampil → "Terkumpul (demo)" → nama berkas + metadata masih ada
 setelah reload (localStorage memuat `fileName`), tanpa `pageerror`. Typecheck
 + build produksi web tetap hijau.
+
+## Fitur absensi kehadiran (verifikasi terakhir)
+
+Perintah dan hasil nyata:
+
+```
+npm run test -w @simpul/shared   → 15 passed (2 berkas)
+npm run test -w @simpul/api      → 20 passed (6 tes absensi)
+npm run typecheck -w @simpul/api → lulus
+npm run typecheck -w @simpul/web → lulus
+npm run build                    → shared + api + web lulus (PWA ter-generate)
+npx tsx tooling/attendance-check.ts → 18 PASS / 0 FAIL
+```
+
+Cakupan browser (`tooling/attendance-check.ts`, Chromium headless, dev server
+Vite + API SQLite):
+
+- guru: hub absensi memuat kelas + nav aktif; membuka sesi hari ini;
+  ringkasan total siswa; menandai **Hadir** manual (badge "Manual" + waktu);
+  memindai kode kartu → "Status diperbarui menjadi hadir" (overwrite tercatat);
+  kode asing → pesan "tidak dikenali"; menutup lalu membuka kembali sesi.
+- kartu QR kelas dirender (data URL QR) dan memuat kode 10 karakter.
+- siswa: kartu QR pribadi tampil, kelas + riwayat kehadiran memuat sesi.
+- 390×844: halaman sesi dan kartu siswa tanpa overflow horizontal.
+- tidak ada galat API tak terduga; 401 `/auth/me` di halaman login dan 404
+  scan kode asing (uji negatif yang disengaja) dikecualikan eksplisit.
+
+Screenshot: `/tmp/opencode/simpul-shots/attendance-{hub,session,cards,student,
+session-mobile,student-mobile}.png`.
